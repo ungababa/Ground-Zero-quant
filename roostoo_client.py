@@ -1,5 +1,7 @@
 import hashlib
 import hmac
+import json
+import logging
 import os
 import time
 from typing import Any
@@ -7,6 +9,8 @@ from urllib.parse import urlencode
 
 import requests
 from dotenv import load_dotenv
+
+log = logging.getLogger("roostoo_client")
 
 
 class RoostooClient:
@@ -24,23 +28,48 @@ class RoostooClient:
             base_url or os.getenv("ROOSTOO_BASE_URL") or "https://mock-api.roostoo.com"
         ).rstrip("/")
         self.timeout = timeout
-        self.session = requests.Session()
+        log.debug(
+            "RoostooClient initialized | base_url=%s  api_key=%s...  timeout=%d",
+            self.base_url,
+            self.api_key[:6] if self.api_key else "<empty>",
+            self.timeout,
+        )
 
-    def _timestamp(self) -> str:
-        return str(int(time.time() * 1000))
+    def _timestamp(self) -> int:
+        return int(time.time() * 1000)
 
     def _encode(self, params: dict[str, Any]) -> str:
-        ordered = {key: params[key] for key in sorted(params)}
-        return urlencode(ordered)
+        """Sort keys alphabetically and URL-encode into a query string."""
+        return urlencode({k: params[k] for k in sorted(params)})
 
-    def _headers(self, encoded_params: str) -> dict[str, str]:
+    def _sign(self, params: dict[str, Any]) -> str:
+        encoded = self._encode(params)
         signature = hmac.new(
-            self.secret_key.encode(), encoded_params.encode(), hashlib.sha256
+            self.secret_key.encode("utf-8"),
+            encoded.encode("utf-8"),
+            hashlib.sha256,
         ).hexdigest()
+        log.debug("SIGN  string=%r  sig=%s...%s", encoded, signature[:8], signature[-8:])
+        return signature
+
+    def _signed_headers(self, params: dict[str, Any]) -> dict[str, str]:
         return {
             "RST-API-KEY": self.api_key,
-            "MSG-SIGNATURE": signature,
+            "MSG-SIGNATURE": self._sign(params),
         }
+
+    def _log_response(self, method: str, path: str, resp: requests.Response) -> None:
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text
+        log.debug(
+            "API RESPONSE  %s %s  status=%d  body=%s",
+            method,
+            path,
+            resp.status_code,
+            json.dumps(body, indent=2, default=str),
+        )
 
     def _get(
         self, path: str, params: dict[str, Any] | None = None, signed: bool = False
@@ -48,13 +77,20 @@ class RoostooClient:
         payload = dict(params or {})
         if signed or "timestamp" in payload:
             payload.setdefault("timestamp", self._timestamp())
-        headers = self._headers(self._encode(payload)) if signed else None
-        response = self.session.get(
+        headers = self._signed_headers(payload) if signed else None
+        log.debug(
+            "API REQUEST   GET %s  signed=%s  params=%s",
+            path,
+            signed,
+            json.dumps(payload, default=str),
+        )
+        response = requests.get(
             f"{self.base_url}{path}",
             params=payload,
             headers=headers,
             timeout=self.timeout,
         )
+        self._log_response("GET", path, response)
         response.raise_for_status()
         return response.json()
 
@@ -64,15 +100,22 @@ class RoostooClient:
         payload = dict(params)
         if signed:
             payload.setdefault("timestamp", self._timestamp())
-        encoded = self._encode(payload)
-        headers = self._headers(encoded) if signed else {}
+        encoded_body = self._encode(payload)
+        headers = self._signed_headers(payload) if signed else {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
-        response = self.session.post(
+        log.debug(
+            "API REQUEST   POST %s  signed=%s  body=%s",
+            path,
+            signed,
+            encoded_body,
+        )
+        response = requests.post(
             f"{self.base_url}{path}",
-            data=encoded,
+            data=encoded_body,
             headers=headers,
             timeout=self.timeout,
         )
+        self._log_response("POST", path, response)
         response.raise_for_status()
         return response.json()
 
@@ -94,6 +137,14 @@ class RoostooClient:
     def place_limit_order(
         self, pair: str, side: str, quantity: float, price: float
     ) -> dict[str, Any]:
+        log.info(
+            "PLACE ORDER   pair=%s  side=%s  qty=%.8f  price=%.2f  notional=%.2f",
+            pair,
+            side.upper(),
+            quantity,
+            price,
+            quantity * price,
+        )
         return self._post(
             "/v3/place_order",
             {
@@ -123,6 +174,7 @@ class RoostooClient:
     def cancel_order(
         self, order_id: int | None = None, pair: str | None = None
     ) -> dict[str, Any]:
+        log.info("CANCEL ORDER  order_id=%s  pair=%s", order_id, pair)
         payload: dict[str, Any] = {}
         if order_id is not None:
             payload["order_id"] = order_id

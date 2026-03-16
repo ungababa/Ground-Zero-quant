@@ -10,12 +10,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts-dir", default="artifacts")
     parser.add_argument("--sample-rows", type=int, default=20)
+    parser.add_argument("--pair", default="SOL/USD",
+                        help="Trading pair displayed in the report, e.g. SOL/USD or BTC/USD")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     artifacts_dir = Path(args.artifacts_dir)
+    coin = args.pair.split("/")[0]
     detail = pd.read_csv(artifacts_dir / "detailed_backtest_log.csv")
     detail["timestamp"] = pd.to_datetime(detail["timestamp"], utc=True)
     equity = pd.read_csv(artifacts_dir / "equity_curve.csv")
@@ -28,12 +31,12 @@ def main() -> None:
     fig, axes = plt.subplots(3, 1, figsize=(15, 12), sharex=True)
     axes[0].plot(
         detail["timestamp"],
-        detail["current_position_btc"],
+        detail["current_position_coin"],
         color="purple",
         linewidth=1.5,
     )
-    axes[0].set_title("BTC Position Over Time")
-    axes[0].set_ylabel("BTC")
+    axes[0].set_title(f"{coin} Position Over Time")
+    axes[0].set_ylabel(coin)
     axes[0].grid(alpha=0.25)
 
     axes[1].plot(
@@ -60,7 +63,7 @@ def main() -> None:
 
     columns = [
         "timestamp",
-        "current_position_btc",
+        "current_position_coin",
         "current_limit_orders_json",
         "unrealized_pnl_usd",
         "anchor_price",

@@ -78,7 +78,7 @@ Fill in `.env` with your Roostoo credentials before live trading.
 ## Live run
 
 ```bash
-python3 main.py --pair BTC/USD --poll-seconds 20
+python3 main.py --pair SOL/USD --poll-seconds 60
 ```
 
 ## Backtest

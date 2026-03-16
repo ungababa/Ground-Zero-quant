@@ -21,12 +21,16 @@ FORMULAS = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts-dir", default="artifacts")
+    parser.add_argument("--pair", default="SOL/USD",
+                        help="Trading pair displayed in charts, e.g. SOL/USD or BTC/USD")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     artifacts_dir = Path(args.artifacts_dir)
+    pair = args.pair
+    coin = pair.split("/")[0]
     trades = pd.read_csv(artifacts_dir / "trades.csv")
     equity = pd.read_csv(artifacts_dir / "equity_curve.csv")
 
@@ -51,7 +55,7 @@ def main() -> None:
         equity["close"],
         color="steelblue",
         linewidth=1.4,
-        label="BTC Close",
+        label=f"{coin} Close",
     )
     axes[0].scatter(
         buy_trades["timestamp"],
@@ -69,7 +73,7 @@ def main() -> None:
         label="SELL",
         alpha=0.85,
     )
-    axes[0].set_title("BTC/USD Grid Bot Backtest Trades")
+    axes[0].set_title(f"{pair} Grid Bot Backtest Trades")
     axes[0].set_ylabel("Price (USD)")
     axes[0].legend(loc="best")
     axes[0].grid(alpha=0.25)

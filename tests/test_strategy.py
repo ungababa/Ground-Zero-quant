@@ -24,7 +24,7 @@ class StrategyTests(unittest.TestCase):
         self.strategy.set_anchor(100.0)
 
     def test_desired_orders_builds_symmetric_grid(self) -> None:
-        orders = self.strategy.desired_orders(self.ticker, btc_position=0.0)
+        orders = self.strategy.desired_orders(self.ticker, coin_position=0.0)
         self.assertEqual(len(orders), 4)
         self.assertEqual([o.side for o in orders], ["BUY", "SELL", "BUY", "SELL"])
         self.assertEqual([o.price for o in orders], [99.0, 101.0, 98.0, 102.0])
@@ -34,7 +34,7 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(self.strategy.should_pause(volatile))
 
     def test_equivalent_matches_same_orders(self) -> None:
-        desired = self.strategy.desired_orders(self.ticker, btc_position=0.0)
+        desired = self.strategy.desired_orders(self.ticker, coin_position=0.0)
         live = [
             {"Side": o.side, "Price": o.price, "Quantity": o.quantity} for o in desired
         ]
@@ -53,7 +53,7 @@ class StrategyTests(unittest.TestCase):
         )
         strategy = GridStrategy(self.config, strict_rules)
         strategy.set_anchor(100.0)
-        orders = strategy.desired_orders(self.ticker, btc_position=0.0)
+        orders = strategy.desired_orders(self.ticker, coin_position=0.0)
         self.assertEqual(orders, [])
 
 

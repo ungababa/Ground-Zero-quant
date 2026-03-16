@@ -11,6 +11,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts-dir", default="artifacts")
     parser.add_argument("--output", default="artifacts/backtest_replay.html")
+    parser.add_argument("--pair", default="SOL/USD",
+                        help="Trading pair displayed in the report, e.g. SOL/USD or BTC/USD")
     return parser.parse_args()
 
 
@@ -22,6 +24,8 @@ def main() -> None:
     args = parse_args()
     artifacts_dir = Path(args.artifacts_dir)
     output_path = Path(args.output)
+    pair = args.pair
+    coin = pair.split("/")[0]
 
     detail = pd.read_csv(artifacts_dir / "detailed_backtest_log.csv")
     trades = pd.read_csv(artifacts_dir / "trades.csv")
@@ -94,7 +98,7 @@ def main() -> None:
 </head>
 <body>
   <div class=\"wrap\">
-    <h1>Roostoo BTC/USD Grid Bot Backtest Replay</h1>
+    <h1>Roostoo {pair} Grid Bot Backtest Replay</h1>
     <p>Generated from the actual backtest CSV artifacts. Use the slider or Play button to replay the simulation bar by bar.</p>
 
     <div class=\"metrics\" id=\"metricCards\"></div>
@@ -186,7 +190,7 @@ def main() -> None:
         low: lows,
         close: closes,
         type: 'candlestick',
-        name: 'BTC/USD',
+        name: '{pair}',
         xaxis: 'x',
         yaxis: 'y',
       }},
@@ -284,8 +288,8 @@ def main() -> None:
         ['Timestamp', row.timestamp],
         ['Close', '$' + fmt(row.close)],
         ['Cash', '$' + fmt(row.cash_usd)],
-        ['Position', fmt(row.current_position_btc, 6) + ' BTC'],
-        ['BTC Value', '$' + fmt(row.btc_market_value_usd)],
+        ['Position', fmt(row.current_position_coin, 6) + ' {coin}'],
+        ['{coin} Value', '$' + fmt(row.coin_market_value_usd)],
         ['Position Notional', '$' + fmt(row.current_position_notional_usd)],
         ['Equity', '$' + fmt(row.equity_usd)],
         ['Realized PnL', '$' + fmt(row.realized_pnl_usd)],
