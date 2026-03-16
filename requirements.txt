@@ -1,0 +1,7 @@
+requests
+pandas
+numpy
+optuna
+yfinance
+python-dotenv
+matplotlib
