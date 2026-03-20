@@ -18,6 +18,7 @@ from datetime import timedelta
 
 import optuna
 import pandas as pd
+
 from backtest import load_history, run_backtest
 from config import GridConfig
 from metrics import summarize_equity_curve
@@ -29,6 +30,7 @@ DEFAULT_WINDOW_DAYS = 14  # 2 weeks per fold
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def split_into_windows(history: pd.DataFrame, window_days: int) -> list[pd.DataFrame]:
     """Slice *history* into consecutive non-overlapping windows of *window_days* each."""
@@ -52,13 +54,9 @@ def _build_config(trial: optuna.Trial) -> GridConfig:
     return GridConfig(
         spacing_pct=trial.suggest_float("spacing_pct", 0.0001, 0.05, log=True),
         levels_per_side=levels,
-        per_level_notional_usd=trial.suggest_float(
-            "per_level_notional_usd", 5_000.0, 100_000.0, step=500.0
-        ),
+        per_level_notional_usd=trial.suggest_float("per_level_notional_usd", 5_000.0, 100_000.0, step=500.0),
         max_position_notional_usd=1_000_000.0,
-        refresh_threshold_pct=trial.suggest_float(
-            "refresh_threshold_pct", 0.0001, 0.05, log=True
-        ),
+        refresh_threshold_pct=trial.suggest_float("refresh_threshold_pct", 0.0001, 0.05, log=True),
         max_open_orders=levels * 2,
     )
 
@@ -82,9 +80,7 @@ def excess_roi(equity_curve: pd.DataFrame) -> float:
     return float(strat_roi - bh_roi)
 
 
-def evaluate_config_on_windows(
-    config: GridConfig, windows: list[pd.DataFrame]
-) -> list[float]:
+def evaluate_config_on_windows(config: GridConfig, windows: list[pd.DataFrame]) -> list[float]:
     """Return per-window excess ROI (strategy − buy-and-hold) for *config*."""
     return [excess_roi(run_backtest(config, w)[0]) for w in windows]
 
@@ -93,25 +89,28 @@ def evaluate_config_on_windows(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Walk-forward (time-series CV) grid strategy optimizer.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--days", type=int, default=DEFAULT_YEAR_DAYS,
+        "--days",
+        type=int,
+        default=DEFAULT_YEAR_DAYS,
         help="Total history to load in days.",
     )
     parser.add_argument(
-        "--window-days", type=int, default=DEFAULT_WINDOW_DAYS,
+        "--window-days",
+        type=int,
+        default=DEFAULT_WINDOW_DAYS,
         help="Length of each CV fold in days.",
     )
     parser.add_argument("--csv", type=str, default=None, help="Local CSV override.")
     parser.add_argument("--trials", type=int, default=50, help="Optuna trial count.")
     parser.add_argument("--ticker", type=str, default="SOL-USD", help="yfinance ticker.")
-    parser.add_argument(
-        "--top", type=int, default=5, help="Number of top strategies to display."
-    )
+    parser.add_argument("--top", type=int, default=5, help="Number of top strategies to display.")
     return parser.parse_args()
 
 
@@ -126,14 +125,9 @@ if __name__ == "__main__":
     history = load_history(args.days, args.csv, ticker=args.ticker)
 
     windows = split_into_windows(history, args.window_days)
-    print(
-        f"Split into {len(windows)} non-overlapping {args.window_days}-day windows.\n"
-    )
+    print(f"Split into {len(windows)} non-overlapping {args.window_days}-day windows.\n")
     for i, w in enumerate(windows):
-        print(
-            f"  [{i + 1:>2}] {w['timestamp'].min().date()} → "
-            f"{w['timestamp'].max().date()}  ({len(w)} bars)"
-        )
+        print(f"  [{i + 1:>2}] {w['timestamp'].min().date()} → {w['timestamp'].max().date()}  ({len(w)} bars)")
 
     # -----------------------------------------------------------------------
     # Optuna study — objective = average excess ROI vs buy-and-hold
@@ -200,8 +194,5 @@ if __name__ == "__main__":
     print(f"\n  Avg excess ROI : {avg_excess:+.4%}")
     print(f"  Min excess ROI : {min(excess_rois):+.4%}")
     print(f"  Max excess ROI : {max(excess_rois):+.4%}")
-    print(
-        f"  Consistency    : "
-        f"{sum(1 for r in excess_rois if r > 0)}/{len(excess_rois)} windows beat B&H"
-    )
+    print(f"  Consistency    : {sum(1 for r in excess_rois if r > 0)}/{len(excess_rois)} windows beat B&H")
     print("\n  Best params :", study.best_params)

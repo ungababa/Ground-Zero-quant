@@ -45,22 +45,13 @@ class GridConfig:
             pair=os.getenv("GRID_PAIR", "SOL/USD"),
             levels_per_side=int(os.getenv("GRID_LEVELS_PER_SIDE", "4")),
             spacing_pct=float(os.getenv("GRID_SPACING_PCT", "0.0035")),
-            per_level_notional_usd=float(
-                os.getenv("GRID_PER_LEVEL_NOTIONAL_USD", "2000")
-            ),
-            max_position_notional_usd=float(
-                os.getenv("GRID_MAX_POSITION_NOTIONAL_USD", "12000")
-            ),
-            refresh_threshold_pct=float(
-                os.getenv("GRID_REFRESH_THRESHOLD_PCT", "0.003")
-            ),
+            per_level_notional_usd=float(os.getenv("GRID_PER_LEVEL_NOTIONAL_USD", "2000")),
+            max_position_notional_usd=float(os.getenv("GRID_MAX_POSITION_NOTIONAL_USD", "12000")),
+            refresh_threshold_pct=float(os.getenv("GRID_REFRESH_THRESHOLD_PCT", "0.003")),
             poll_seconds=int(os.getenv("GRID_POLL_SECONDS", "20")),
             max_open_orders=int(os.getenv("GRID_MAX_OPEN_ORDERS", "8")),
-            max_24h_abs_change_pct=float(
-                os.getenv("GRID_MAX_24H_ABS_CHANGE_PCT", "0.15")
-            ),
-            reanchor_after_fill=os.getenv("GRID_REANCHOR_AFTER_FILL", "true").lower()
-            == "true",
+            max_24h_abs_change_pct=float(os.getenv("GRID_MAX_24H_ABS_CHANGE_PCT", "0.15")),
+            reanchor_after_fill=os.getenv("GRID_REANCHOR_AFTER_FILL", "true").lower() == "true",
             pause_guard=os.getenv("GRID_PAUSE_GUARD", "true").lower() == "true",
         )
 

@@ -39,17 +39,11 @@ class FakeClient:
         self.cancel_calls += 1
         return {"Success": True, "CanceledList": []}
 
-    def query_orders(
-        self, pair: str, pending_only: bool = False, limit: int = 100
-    ) -> dict:
+    def query_orders(self, pair: str, pending_only: bool = False, limit: int = 100) -> dict:
         return {"Success": False, "ErrMsg": "no order matched", "OrderMatched": []}
 
-    def place_limit_order(
-        self, pair: str, side: str, quantity: float, price: float
-    ) -> dict:
-        self.placed.append(
-            {"pair": pair, "side": side, "quantity": quantity, "price": price}
-        )
+    def place_limit_order(self, pair: str, side: str, quantity: float, price: float) -> dict:
+        self.placed.append({"pair": pair, "side": side, "quantity": quantity, "price": price})
         return {"Success": True}
 
 
@@ -62,9 +56,7 @@ class MainTests(unittest.TestCase):
             max_position_notional_usd=3000,
             max_open_orders=4,
         )
-        rules = PairRules(
-            pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0
-        )
+        rules = PairRules(pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0)
         strategy = GridStrategy(config, rules)
         client = FakeClient()
 
@@ -77,9 +69,7 @@ class MainTests(unittest.TestCase):
 
     def test_run_once_pauses_on_large_market_move(self) -> None:
         config = GridConfig(max_24h_abs_change_pct=0.03)
-        rules = PairRules(
-            pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0
-        )
+        rules = PairRules(pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0)
         strategy = GridStrategy(config, rules)
         client = FakeClient(change=0.05)
 

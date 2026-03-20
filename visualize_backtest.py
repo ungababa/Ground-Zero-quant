@@ -4,6 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+
 from metrics import summarize_equity_curve
 
 FORMULAS = {
@@ -21,8 +22,7 @@ FORMULAS = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts-dir", default="artifacts")
-    parser.add_argument("--pair", default="SOL/USD",
-                        help="Trading pair displayed in charts, e.g. SOL/USD or BTC/USD")
+    parser.add_argument("--pair", default="SOL/USD", help="Trading pair displayed in charts, e.g. SOL/USD or BTC/USD")
     return parser.parse_args()
 
 
@@ -41,7 +41,7 @@ def main() -> None:
     sell_trades = trades[trades["side"] == "SELL"]
 
     bot_summary = summarize_equity_curve(equity)
-    
+
     bh_summary = None
     if "bh_equity" in equity.columns:
         bh_summary = summarize_equity_curve(equity[["bh_equity"]].rename(columns={"bh_equity": "equity"}))
@@ -104,7 +104,7 @@ def main() -> None:
     if bh_summary:
         metrics_text = (
             f"{'Metric':<12} | {'Bot':<8} | {'B&H':<8}\n"
-            f"{'-'*32}\n"
+            f"{'-' * 32}\n"
             f"{'ROI':<12} | {bot_summary['total_return']:>7.2%} | {bh_summary['total_return']:>7.2%}\n"
             f"{'Max DD':<12} | {bot_summary['max_drawdown']:>7.2%} | {bh_summary['max_drawdown']:>7.2%}\n"
             f"{'Sharpe':<12} | {bot_summary['sharpe']:>7.3f} | {bh_summary['sharpe']:>7.3f}\n"
@@ -114,12 +114,14 @@ def main() -> None:
         )
     else:
         # Fallback if B&H data is missing
-        metrics_text = "\n".join([
-            f"ROI: {bot_summary['total_return']:.2%}",
-            f"Max DD: {bot_summary['max_drawdown']:.2%}",
-            f"Sharpe: {bot_summary['sharpe']:.3f}",
-            f"Trades: {trade_count}"
-        ])
+        metrics_text = "\n".join(
+            [
+                f"ROI: {bot_summary['total_return']:.2%}",
+                f"Max DD: {bot_summary['max_drawdown']:.2%}",
+                f"Sharpe: {bot_summary['sharpe']:.3f}",
+                f"Trades: {trade_count}",
+            ]
+        )
 
     axes[1].text(
         1.01,

@@ -11,8 +11,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts-dir", default="artifacts")
     parser.add_argument("--output", default="artifacts/backtest_replay.html")
-    parser.add_argument("--pair", default="SOL/USD",
-                        help="Trading pair displayed in the report, e.g. SOL/USD or BTC/USD")
+    parser.add_argument(
+        "--pair", default="SOL/USD", help="Trading pair displayed in the report, e.g. SOL/USD or BTC/USD"
+    )
     return parser.parse_args()
 
 
@@ -33,16 +34,12 @@ def main() -> None:
 
     metrics = summarize_equity_curve(equity.rename(columns={"equity": "equity"}))
     periods = max(len(equity), 1)
-    metrics["annualized_return"] = (
-        (1 + metrics["total_return"]) ** (365 / periods) - 1 if periods > 0 else 0.0
-    )
+    metrics["annualized_return"] = (1 + metrics["total_return"]) ** (365 / periods) - 1 if periods > 0 else 0.0
     metrics["trade_count"] = int(len(trades))
 
     for frame in (detail, trades, equity):
         if "timestamp" in frame.columns:
-            frame["timestamp"] = pd.to_datetime(
-                frame["timestamp"], utc=True
-            ).dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True).dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
     html = f"""<!DOCTYPE html>
 <html lang=\"en\">

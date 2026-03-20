@@ -10,8 +10,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts-dir", default="artifacts")
     parser.add_argument("--sample-rows", type=int, default=20)
-    parser.add_argument("--pair", default="SOL/USD",
-                        help="Trading pair displayed in the report, e.g. SOL/USD or BTC/USD")
+    parser.add_argument(
+        "--pair", default="SOL/USD", help="Trading pair displayed in the report, e.g. SOL/USD or BTC/USD"
+    )
     return parser.parse_args()
 
 
@@ -75,9 +76,7 @@ def main() -> None:
     header = "| " + " | ".join(columns) + " |"
     separator = "| " + " | ".join(["---"] * len(columns)) + " |"
     rows = [
-        "| "
-        + " | ".join(str(row[column]).replace("\n", " ") for column in columns)
-        + " |"
+        "| " + " | ".join(str(row[column]).replace("\n", " ") for column in columns) + " |"
         for _, row in sample.iterrows()
     ]
     md_lines = [

@@ -62,19 +62,13 @@ class BacktestTests(unittest.TestCase):
             index=pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
         )
         df = load_history(days=2, interval="1d")
-        self.assertEqual(
-            list(df.columns), ["timestamp", "open", "high", "low", "close"]
-        )
+        self.assertEqual(list(df.columns), ["timestamp", "open", "high", "low", "close"])
         self.assertEqual(len(df), 2)
 
     @patch("backtest.yf.download")
-    def test_load_history_raises_when_yfinance_returns_empty(
-        self, mock_download
-    ) -> None:
+    def test_load_history_raises_when_yfinance_returns_empty(self, mock_download) -> None:
         mock_download.return_value = pd.DataFrame()
-        with self.assertRaisesRegex(
-            ValueError, "No historical data returned from yfinance"
-        ):
+        with self.assertRaisesRegex(ValueError, "No historical data returned from yfinance"):
             load_history(days=2, interval="1h")
 
 

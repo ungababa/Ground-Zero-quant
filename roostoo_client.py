@@ -5,7 +5,6 @@ import logging
 import os
 import time
 from typing import Any
-from urllib.parse import urlencode
 
 import requests
 from dotenv import load_dotenv
@@ -24,9 +23,7 @@ class RoostooClient:
         load_dotenv()
         self.api_key = api_key or os.getenv("ROOSTOO_API_KEY", "")
         self.secret_key = secret_key or os.getenv("ROOSTOO_SECRET_KEY", "")
-        self.base_url = (
-            base_url or os.getenv("ROOSTOO_BASE_URL") or "https://mock-api.roostoo.com"
-        ).rstrip("/")
+        self.base_url = (base_url or os.getenv("ROOSTOO_BASE_URL") or "https://mock-api.roostoo.com").rstrip("/")
         self.timeout = timeout
         log.debug(
             "RoostooClient initialized | base_url=%s  api_key=%s...  timeout=%d",
@@ -40,7 +37,7 @@ class RoostooClient:
 
     def _encode(self, params: dict[str, Any]) -> str:
         """Sort keys alphabetically and URL-encode into a query string."""
-        return urlencode({k: params[k] for k in sorted(params)})
+        return "&".join(f"{key}={params[key]}" for key in sorted(params.keys()))
 
     def _sign(self, params: dict[str, Any]) -> str:
         encoded = self._encode(params)
@@ -71,9 +68,7 @@ class RoostooClient:
             json.dumps(body, indent=2, default=str),
         )
 
-    def _get(
-        self, path: str, params: dict[str, Any] | None = None, signed: bool = False
-    ) -> dict[str, Any]:
+    def _get(self, path: str, params: dict[str, Any] | None = None, signed: bool = False) -> dict[str, Any]:
         payload = dict(params or {})
         if signed or "timestamp" in payload:
             payload.setdefault("timestamp", self._timestamp())
@@ -94,9 +89,7 @@ class RoostooClient:
         response.raise_for_status()
         return response.json()
 
-    def _post(
-        self, path: str, params: dict[str, Any], signed: bool = True
-    ) -> dict[str, Any]:
+    def _post(self, path: str, params: dict[str, Any], signed: bool = True) -> dict[str, Any]:
         payload = dict(params)
         if signed:
             payload.setdefault("timestamp", self._timestamp())
@@ -134,9 +127,7 @@ class RoostooClient:
     def pending_count(self) -> dict[str, Any]:
         return self._get("/v3/pending_count", signed=True)
 
-    def place_limit_order(
-        self, pair: str, side: str, quantity: float, price: float
-    ) -> dict[str, Any]:
+    def place_limit_order(self, pair: str, side: str, quantity: float, price: float) -> dict[str, Any]:
         log.info(
             "PLACE ORDER   pair=%s  side=%s  qty=%.8f  price=%.2f  notional=%.2f",
             pair,
@@ -156,9 +147,7 @@ class RoostooClient:
             },
         )
 
-    def query_orders(
-        self, pair: str, pending_only: bool = False, limit: int = 100
-    ) -> dict[str, Any]:
+    def query_orders(self, pair: str, pending_only: bool = False, limit: int = 100) -> dict[str, Any]:
         return self._post(
             "/v3/query_order",
             {
@@ -171,9 +160,7 @@ class RoostooClient:
     def query_order(self, order_id: int) -> dict[str, Any]:
         return self._post("/v3/query_order", {"order_id": order_id})
 
-    def cancel_order(
-        self, order_id: int | None = None, pair: str | None = None
-    ) -> dict[str, Any]:
+    def cancel_order(self, order_id: int | None = None, pair: str | None = None) -> dict[str, Any]:
         log.info("CANCEL ORDER  order_id=%s  pair=%s", order_id, pair)
         payload: dict[str, Any] = {}
         if order_id is not None:

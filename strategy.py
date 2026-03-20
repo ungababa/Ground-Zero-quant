@@ -73,9 +73,7 @@ class GridStrategy:
         self.anchor_price = price
         log.info("ANCHOR SET  %.2f -> %.2f", old or 0.0, price)
 
-    def desired_orders(
-        self, ticker: TickerView, coin_position: float
-    ) -> list[DesiredOrder]:
+    def desired_orders(self, ticker: TickerView, coin_position: float) -> list[DesiredOrder]:
         anchor = self.anchor_price or ticker.mid
         qty = self.config.order_quantity(anchor, self.rules)
         max_coin = self.config.max_position_notional_usd / ticker.mid
@@ -92,20 +90,15 @@ class GridStrategy:
         orders: list[DesiredOrder] = []
 
         for level in range(1, self.config.levels_per_side + 1):
-            buy_price = self.rules.round_price(
-                anchor * (1 - self.config.spacing_pct * level)
-            )
-            sell_price = self.rules.round_price(
-                anchor * (1 + self.config.spacing_pct * level)
-            )
+            buy_price = self.rules.round_price(anchor * (1 - self.config.spacing_pct * level))
+            sell_price = self.rules.round_price(anchor * (1 + self.config.spacing_pct * level))
 
             projected_coin = coin_position + qty * level
             buy_ok = projected_coin <= max_coin
-            sell_ok = coin_position - qty * level >= -max_coin
+            sell_ok = round(coin_position - qty * level, 8) >= 0
 
             log.debug(
-                "  level=%d  buy_price=%.2f (projected_coin=%.8f, ok=%s)  "
-                "sell_price=%.2f (remaining=%.8f, ok=%s)",
+                "  level=%d  buy_price=%.2f (projected_coin=%.8f, ok=%s)  sell_price=%.2f (remaining=%.8f, ok=%s)",
                 level,
                 buy_price,
                 projected_coin,
@@ -121,11 +114,7 @@ class GridStrategy:
                 orders.append(DesiredOrder("SELL", sell_price, qty))
 
         pre_filter = len(orders)
-        orders = [
-            order
-            for order in orders
-            if order.price * order.quantity >= self.rules.min_order_value
-        ]
+        orders = [order for order in orders if order.price * order.quantity >= self.rules.min_order_value]
         if pre_filter != len(orders):
             log.debug(
                 "  min_order_value filter removed %d orders (min=%.2f)",
@@ -138,9 +127,7 @@ class GridStrategy:
             log.debug("  [%d] %s", i, o)
         return orders
 
-    def equivalent(
-        self, live_orders: Iterable[dict], desired_orders: Iterable[DesiredOrder]
-    ) -> bool:
+    def equivalent(self, live_orders: Iterable[dict], desired_orders: Iterable[DesiredOrder]) -> bool:
         live = sorted(
             (
                 order["Side"],
@@ -149,10 +136,7 @@ class GridStrategy:
             )
             for order in live_orders
         )
-        desired = sorted(
-            (order.side, round(order.price, 8), round(order.quantity, 8))
-            for order in desired_orders
-        )
+        desired = sorted((order.side, round(order.price, 8), round(order.quantity, 8)) for order in desired_orders)
         result = live == desired
         log.debug(
             "equivalent? live_count=%d  desired_count=%d  match=%s",

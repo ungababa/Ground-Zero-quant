@@ -16,9 +16,7 @@ class StrategyTests(unittest.TestCase):
             per_level_notional_usd=1000,
             max_position_notional_usd=3000,
         )
-        self.rules = PairRules(
-            pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0
-        )
+        self.rules = PairRules(pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0)
         self.strategy = GridStrategy(self.config, self.rules)
         self.ticker = TickerView(bid=100.0, ask=100.0, last=100.0, change_24h=0.0)
         self.strategy.set_anchor(100.0)
@@ -35,9 +33,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_equivalent_matches_same_orders(self) -> None:
         desired = self.strategy.desired_orders(self.ticker, coin_position=0.0)
-        live = [
-            {"Side": o.side, "Price": o.price, "Quantity": o.quantity} for o in desired
-        ]
+        live = [{"Side": o.side, "Price": o.price, "Quantity": o.quantity} for o in desired]
         self.assertTrue(self.strategy.equivalent(live, desired))
 
     def test_should_refresh_when_anchor_is_missing(self) -> None:
