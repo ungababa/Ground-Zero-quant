@@ -34,77 +34,33 @@ def pair_rules_from_exchange_info(exchange_info: dict, pair: str) -> PairRules:
 
 def coin_free_balance(balance_response: dict, pair: str) -> float:
     coin = pair.split("/")[0]
-    wallet = balance_response.get("SpotWallet", {})
-    log.debug("Full wallet snapshot: %s", json.dumps(wallet, indent=2, default=str))
+    wallet = balance_response.get("Wallet", {})
     coin_entry = wallet.get(coin, {})
-    if not coin_entry:
-        log.warning("Coin %s not found in wallet — available keys: %s", coin, list(wallet.keys()))
-    free = float(coin_entry.get("Free", 0.0))
-    locked = coin_entry.get("Locked", "N/A")
-    total = coin_entry.get("Total", "N/A")
-    log.debug(
-        "%s wallet | Free=%.8f  Locked=%s  Total=%s",
-        coin,
-        free,
-        locked,
-        total,
-    )
+    return float(coin_entry.get("Free", 0.0))
+
+def usd_free_balance(balance_response: dict) -> float:
+    wallet = balance_response.get("Wallet", {})
     usd_entry = wallet.get("USD", {})
-    log.debug(
-        "USD wallet | Free=%s  Locked=%s  Total=%s",
-        usd_entry.get("Free", "N/A"),
-        usd_entry.get("Locked", "N/A"),
-        usd_entry.get("Total", "N/A"),
-    )
-    return free
+    return float(usd_entry.get("Free", 0.0))
 
 
 def pending_orders(order_response: dict) -> list[dict]:
     success = order_response.get("Success")
     all_orders = order_response.get("OrderMatched", [])
-    log.debug(
-        "query_orders response | Success=%s  total_orders_returned=%d",
-        success,
-        len(all_orders),
-    )
     if not success:
         log.warning("query_orders returned Success=False, treating as 0 pending orders")
         return []
     pending = [o for o in all_orders if o.get("Status") == "PENDING"]
-    log.debug("Pending orders (%d):", len(pending))
-    for i, o in enumerate(pending):
-        log.debug(
-            "  [%d] id=%s  side=%s  price=%s  qty=%s  status=%s  pair=%s",
-            i,
-            o.get("OrderID", "?"),
-            o.get("Side", "?"),
-            o.get("Price", "?"),
-            o.get("Quantity", "?"),
-            o.get("Status", "?"),
-            o.get("Pair", "?"),
-        )
-    non_pending = [o for o in all_orders if o.get("Status") != "PENDING"]
-    if non_pending:
-        log.debug("Non-pending orders (%d):", len(non_pending))
-        for o in non_pending:
-            log.debug(
-                "  id=%s  side=%s  price=%s  qty=%s  status=%s",
-                o.get("OrderID", "?"),
-                o.get("Side", "?"),
-                o.get("Price", "?"),
-                o.get("Quantity", "?"),
-                o.get("Status", "?"),
-            )
     return pending
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pair", default="SOL/USD")
+    parser.add_argument("--pair", default=None)
     parser.add_argument("--poll-seconds", type=int, default=None)
     parser.add_argument(
         "--log-level",
-        default="DEBUG",
+        default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     return parser.parse_args()
@@ -114,17 +70,9 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
     ts = datetime.now(timezone.utc).isoformat()
     log.info("CYCLE %d  started at %s", cycle, ts)
 
-    log.debug(
-        "Strategy state | anchor_price=%s  pair=%s",
-        strategy.anchor_price,
-        config.pair,
-    )
-
-    # Ticker
-    log.debug("Fetching ticker for %s ...", config.pair)
     ticker_response = client.ticker(config.pair)
     market = ticker_response["Data"][config.pair]
-    log.debug("Raw market data: %s", json.dumps(market, indent=2, default=str))
+
     ticker = TickerView(
         bid=float(market["MaxBid"]),
         ask=float(market["MinAsk"]),
@@ -133,7 +81,9 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
     )
     log.info("TICKER  %s", ticker)
 
-    # Pause check
+    # IMPORTANT for soft-signal strategy
+    strategy.record_price(ticker.mid)
+
     if strategy.should_pause(ticker):
         log.warning(
             "PAUSED — 24h change %.4f%% exceeds threshold %.4f%%",
@@ -146,50 +96,45 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
             "change_24h": ticker.change_24h,
         }
 
-    # Balance
-    coin = config.pair.split("/")[0]
-    log.debug("Fetching balance ...")
     balance = client.balance()
     coin_position = coin_free_balance(balance, config.pair)
-    log.info(
-        "%s FREE BALANCE  %.8f  (~$%.2f at mid)",
-        coin,
-        coin_position,
-        coin_position * ticker.mid,
-    )
+    usd_free = usd_free_balance(balance)
 
-    # Refresh check
     if strategy.should_refresh(ticker):
         log.info("REFRESH triggered — cancelling all orders and re-anchoring to mid=%.2f", ticker.mid)
         cancel_resp = client.cancel_order(pair=config.pair)
         log.debug("Cancel-all response: %s", json.dumps(cancel_resp, default=str))
         strategy.set_anchor(ticker.mid)
 
-    # Open orders
-    log.debug("Querying open orders (pending_only=True, limit=%d) ...", config.max_open_orders)
     open_orders = pending_orders(client.query_orders(config.pair, pending_only=True, limit=config.max_open_orders))
 
-    # Desired orders
-    desired = strategy.desired_orders(ticker, coin_position)
+    desired = strategy.desired_orders(ticker, coin_position, usd_free)
     placed = 0
 
-    # Equivalence check & placement
-    orders_match = strategy.equivalent(open_orders, desired)
-    if orders_match:
-        log.info("Orders on book already match desired grid — no action needed")
-    else:
-        log.info(
-            "Orders MISMATCH — live=%d  desired=%d — will cancel and re-place",
-            len(open_orders),
-            len(desired),
-        )
-        if open_orders:
-            cancel_resp = client.cancel_order(pair=config.pair)
-            log.debug("Cancel-all response: %s", json.dumps(cancel_resp, default=str))
+    desired_map = {(o.side, round(o.price, 8), round(o.quantity, 8)): o for o in desired}
+    open_map = {
+        (
+            order.get("Side"),
+            round(float(order.get("Price", 0.0)), 8),
+            round(float(order.get("Quantity", 0.0)), 8),
+        ): order
+        for order in open_orders
+    }
 
-        to_place = desired[: config.max_open_orders]
-        log.info("Placing %d orders (max_open_orders=%d):", len(to_place), config.max_open_orders)
-        for i, order in enumerate(to_place):
+    to_cancel = [order for key, order in open_map.items() if key not in desired_map]
+    to_place = [order for key, order in desired_map.items() if key not in open_map]
+
+    if to_cancel:
+        log.info("Cancelling %d stale orders", len(to_cancel))
+        for order in to_cancel:
+            try:
+                client.cancel_order(order_id=str(order["OrderID"]))
+            except Exception as exc:
+                log.exception("cancel_order failed | order_id=%s err=%s", order.get("OrderID"), exc)
+
+    if to_place:
+        log.info("Placing %d orders", min(len(to_place), config.max_open_orders))
+        for i, order in enumerate(to_place[: config.max_open_orders]):
             log.info("  [%d] %s", i, order)
             resp = client.place_limit_order(config.pair, order.side, order.quantity, order.price)
             log.debug("  place_order response: %s", json.dumps(resp, default=str))
@@ -198,8 +143,8 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
     result = {
         "status": "ok",
         "mid": ticker.mid,
-        "coin": coin,
         "coin_free": coin_position,
+        "usd_free": usd_free,
         "anchor": strategy.anchor_price,
         "desired_orders": len(desired),
         "placed_orders": placed,
@@ -209,7 +154,7 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
 
 
 def setup_logging(level_name: str) -> None:
-    level = getattr(logging, level_name.upper(), logging.DEBUG)
+    level = getattr(logging, level_name.upper(), logging.INFO)
     fmt = "%(asctime)s.%(msecs)03d  %(levelname)-7s  [%(name)s]  %(message)s"
     logging.basicConfig(
         level=level,
@@ -225,7 +170,8 @@ if __name__ == "__main__":
     setup_logging(args.log_level)
 
     config = GridConfig.from_env()
-    config.pair = args.pair
+    if args.pair is not None:
+        config.pair = args.pair
     if args.poll_seconds is not None:
         config.poll_seconds = args.poll_seconds
 
@@ -236,13 +182,6 @@ if __name__ == "__main__":
     log.info("Fetching exchange info ...")
     exchange_info = client.exchange_info()
     rules = pair_rules_from_exchange_info(exchange_info, config.pair)
-    log.info(
-        "PairRules ready: pair=%s  price_prec=%d  amount_prec=%d  min_order=%.4f",
-        rules.pair,
-        rules.price_precision,
-        rules.amount_precision,
-        rules.min_order_value,
-    )
 
     strategy = GridStrategy(config, rules)
 
