@@ -6,7 +6,7 @@ from unittest.mock import call, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import GridConfig, PairRules
-from main import load_environment, parse_args, pending_orders, run_once
+from main import coin_free_balance, load_environment, parse_args, pending_orders, run_once, usd_free_balance
 from strategy import GridStrategy
 
 
@@ -30,7 +30,8 @@ class FakeClient:
 
     def balance(self) -> dict:
         return {
-            "Wallet": {
+            "SpotWallet": {
+                "ETH": {"Free": 20.0, "Lock": 0.0},
                 "BTC": {"Free": 0.0, "Lock": 0.0},
                 "USD": {"Free": 50000.0, "Lock": 0.0},
             }
@@ -112,6 +113,35 @@ class MainTests(unittest.TestCase):
             }
         )
         self.assertEqual(filtered, [{"Status": "PENDING", "OrderID": 1}])
+
+    def test_coin_free_balance_reads_from_spot_wallet(self) -> None:
+        balance = {
+            "SpotWallet": {
+                "ETH": {"Free": 1.25},
+                "USD": {"Free": 100.0},
+            }
+        }
+        self.assertEqual(coin_free_balance(balance, "ETH/USD"), 1.25)
+
+    def test_usd_free_balance_reads_from_spot_wallet(self) -> None:
+        balance = {
+            "SpotWallet": {
+                "ETH": {"Free": 1.25},
+                "USD": {"Free": 321.5},
+            }
+        }
+        self.assertEqual(usd_free_balance(balance), 321.5)
+
+    def test_balance_helpers_warn_when_spot_wallet_missing(self) -> None:
+        balance = {"Wallet": {"ETH": {"Free": 9.0}, "USD": {"Free": 999.0}}}
+
+        with self.assertLogs("main", level="WARNING") as captured:
+            self.assertEqual(coin_free_balance(balance, "ETH/USD"), 0.0)
+            self.assertEqual(usd_free_balance(balance), 0.0)
+
+        self.assertEqual(len(captured.output), 2)
+        for message in captured.output:
+            self.assertIn("SpotWallet missing from balance response", message)
 
 
 if __name__ == "__main__":

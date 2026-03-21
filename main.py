@@ -37,12 +37,16 @@ def coin_free_balance(balance_response: dict, pair: str) -> float:
         log.warning("balance returned Success=False")
         return 0.0
     coin = pair.split("/")[0]
-    wallet = balance_response.get("Wallet", {})
+    wallet = balance_response.get("SpotWallet", {})
+    if not wallet:
+        log.warning("SpotWallet missing from balance response: %s", balance_response)
     coin_entry = wallet.get(coin, {})
     return float(coin_entry.get("Free", 0.0))
 
 def usd_free_balance(balance_response: dict) -> float:
-    wallet = balance_response.get("Wallet", {})
+    wallet = balance_response.get("SpotWallet", {})
+    if not wallet:
+        log.warning("SpotWallet missing from balance response: %s", balance_response)
     usd_entry = wallet.get("USD", {})
     return float(usd_entry.get("Free", 0.0))
 
