@@ -14,7 +14,8 @@ class StrategyTests(unittest.TestCase):
             levels_per_side=2,
             spacing_pct=0.01,
             per_level_notional_usd=1000,
-            max_position_notional_usd=3000,
+            max_position_notional_usd=1_000_000,
+            max_24h_abs_change_pct=0.03,
         )
         self.rules = PairRules(pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0)
         self.strategy = GridStrategy(self.config, self.rules)
@@ -22,7 +23,7 @@ class StrategyTests(unittest.TestCase):
         self.strategy.set_anchor(100.0)
 
     def test_desired_orders_builds_symmetric_grid(self) -> None:
-        orders = self.strategy.desired_orders(self.ticker, coin_position=0.0)
+        orders = self.strategy.desired_orders(self.ticker, coin_position=20.0)
         self.assertEqual(len(orders), 4)
         self.assertEqual([o.side for o in orders], ["BUY", "SELL", "BUY", "SELL"])
         self.assertEqual([o.price for o in orders], [99.0, 101.0, 98.0, 102.0])

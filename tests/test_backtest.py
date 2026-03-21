@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backtest import load_history, run_backtest
+from backtest import load_history, run_backtest, run_weighted_dual_backtest
 from config import GridConfig
 
 
@@ -70,6 +70,52 @@ class BacktestTests(unittest.TestCase):
         mock_download.return_value = pd.DataFrame()
         with self.assertRaisesRegex(ValueError, "No historical data returned from yfinance"):
             load_history(days=2, interval="1h")
+
+    def test_run_weighted_dual_backtest_tracks_per_asset_and_benchmark(self) -> None:
+        timestamps = pd.to_datetime(
+            [
+                "2026-01-01T00:00:00Z",
+                "2026-01-02T00:00:00Z",
+                "2026-01-03T00:00:00Z",
+            ],
+            utc=True,
+        )
+        btc_history = pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [100.0, 101.0, 102.0],
+                "high": [101.0, 102.0, 103.0],
+                "low": [99.0, 100.0, 101.0],
+                "close": [100.0, 101.0, 102.0],
+            }
+        )
+        eth_history = pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [50.0, 49.0, 48.0],
+                "high": [50.5, 49.5, 48.5],
+                "low": [49.5, 48.5, 47.5],
+                "close": [50.0, 49.0, 48.0],
+            }
+        )
+        configs = {
+            "BTC": GridConfig(pair="BTC/USD", levels_per_side=1, spacing_pct=0.01, per_level_notional_usd=1000),
+            "ETH": GridConfig(pair="ETH/USD", levels_per_side=1, spacing_pct=0.01, per_level_notional_usd=1000),
+        }
+
+        equity_curve, trades = run_weighted_dual_backtest(
+            configs=configs,
+            histories={"BTC": btc_history, "ETH": eth_history},
+            weights={"BTC": 0.2, "ETH": 0.8},
+            invested_ratio=0.5,
+        )
+
+        self.assertEqual(len(equity_curve), 3)
+        self.assertGreaterEqual(len(trades), 2)
+        self.assertIn("equity", equity_curve.columns)
+        self.assertIn("bh_equity", equity_curve.columns)
+        self.assertIn("btc_coin", equity_curve.columns)
+        self.assertIn("eth_coin", equity_curve.columns)
 
 
 if __name__ == "__main__":

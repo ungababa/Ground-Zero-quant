@@ -50,6 +50,7 @@ class FakeClient:
 class MainTests(unittest.TestCase):
     def test_run_once_places_orders_from_mock_market_data(self) -> None:
         config = GridConfig(
+            pair="BTC/USD",
             levels_per_side=2,
             spacing_pct=0.01,
             per_level_notional_usd=1000,
@@ -60,12 +61,12 @@ class MainTests(unittest.TestCase):
         strategy = GridStrategy(config, rules)
         client = FakeClient()
 
-        result = run_once(client, config, strategy)
+        result = run_once(client, config, strategy, cycle=1)
 
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["placed_orders"], 4)
+        self.assertEqual(result["placed_orders"], 2)
         self.assertEqual(client.cancel_calls, 1)
-        self.assertEqual(len(client.placed), 4)
+        self.assertEqual(len(client.placed), 2)
 
     def test_run_once_pauses_on_large_market_move(self) -> None:
         config = GridConfig(max_24h_abs_change_pct=0.03)
@@ -73,7 +74,7 @@ class MainTests(unittest.TestCase):
         strategy = GridStrategy(config, rules)
         client = FakeClient(change=0.05)
 
-        result = run_once(client, config, strategy)
+        result = run_once(client, config, strategy, cycle=1)
 
         self.assertEqual(result["status"], "paused")
         self.assertEqual(client.cancel_calls, 0)

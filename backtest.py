@@ -100,6 +100,42 @@ def _compute_change_24h(df: pd.DataFrame) -> np.ndarray:
     return changes
 
 
+def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
+    if not weights:
+        raise ValueError("weights cannot be empty")
+    total = sum(float(value) for value in weights.values())
+    if total <= 0:
+        raise ValueError("weights must sum to a positive value")
+    return {key: float(value) / total for key, value in weights.items()}
+
+
+def _merge_histories(histories: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    if not histories:
+        raise ValueError("histories cannot be empty")
+    merged: pd.DataFrame | None = None
+    required_cols = ["timestamp", "open", "high", "low", "close"]
+
+    for symbol, df in histories.items():
+        missing = [column for column in required_cols if column not in df.columns]
+        if missing:
+            raise ValueError(f"History for {symbol} is missing required columns: {missing}")
+        symbol_upper = symbol.upper()
+        renamed = df[required_cols].copy().rename(
+            columns={
+                "open": f"open_{symbol_upper}",
+                "high": f"high_{symbol_upper}",
+                "low": f"low_{symbol_upper}",
+                "close": f"close_{symbol_upper}",
+            }
+        )
+        merged = renamed if merged is None else merged.merge(renamed, on="timestamp", how="inner")
+
+    if merged is None or merged.empty:
+        raise ValueError("No overlapping timestamps found across supplied histories")
+
+    return merged.sort_values("timestamp").reset_index(drop=True)
+
+
 def simulate_backtest(config: GridConfig, history: pd.DataFrame) -> tuple[pd.DataFrame, list[dict], pd.DataFrame]:
     rules = PairRules(pair=config.pair, price_precision=2, amount_precision=6, min_order_value=1.0)
     strategy = GridStrategy(config, rules)
@@ -244,6 +280,218 @@ def run_backtest(config: GridConfig, history: pd.DataFrame) -> tuple[pd.DataFram
     return equity_curve, trades
 
 
+def simulate_weighted_dual_backtest(
+    configs: dict[str, GridConfig],
+    histories: dict[str, pd.DataFrame],
+    weights: dict[str, float],
+    starting_cash: float = 1_000_000.0,
+    invested_ratio: float = 0.5,
+) -> tuple[pd.DataFrame, list[dict], pd.DataFrame]:
+    symbols = sorted(configs.keys())
+    if len(symbols) < 2:
+        raise ValueError("At least two symbols are required for weighted dual backtesting")
+    if set(symbols) != set(histories.keys()) or set(symbols) != set(weights.keys()):
+        raise ValueError("configs, histories, and weights must contain identical symbol keys")
+    if invested_ratio <= 0 or invested_ratio > 1:
+        raise ValueError("invested_ratio must be in (0, 1]")
+
+    norm_weights = _normalize_weights(weights)
+    merged = _merge_histories(histories)
+
+    strategies: dict[str, GridStrategy] = {}
+    states: dict[str, dict[str, float]] = {}
+    change_by_symbol: dict[str, pd.Series] = {}
+
+    for symbol in symbols:
+        config = configs[symbol]
+        rules = PairRules(pair=config.pair, price_precision=2, amount_precision=6, min_order_value=1.0)
+        strategies[symbol] = GridStrategy(config, rules)
+
+        history = histories[symbol]
+        shifted_change = np.concatenate([[np.nan], _compute_change_24h(history)[:-1]])
+        change_by_symbol[symbol] = pd.Series(shifted_change, index=history["timestamp"])
+
+    invested_cash = starting_cash * invested_ratio
+    cash = starting_cash
+    trades: list[dict] = []
+    total_initial_fee = 0.0
+
+    first_row = merged.iloc[0]
+    for symbol in symbols:
+        open_price = float(first_row[f"open_{symbol.upper()}"])
+        target_notional = invested_cash * norm_weights[symbol]
+        initial_qty = target_notional / open_price
+        initial_fee = target_notional * FEE_RATE
+        total_initial_fee += initial_fee
+
+        cash -= target_notional + initial_fee
+        states[symbol] = {
+            "coin": initial_qty,
+            "avg_cost": open_price,
+            "realized_pnl": 0.0,
+            "bh_qty": initial_qty,
+        }
+        trades.append(
+            {
+                "timestamp": first_row.timestamp,
+                "asset": symbol,
+                "side": "BUY",
+                "price": open_price,
+                "quantity": initial_qty,
+                "fee": initial_fee,
+            }
+        )
+
+    bh_cash = starting_cash - invested_cash - total_initial_fee
+    equity_rows: list[dict] = []
+    detail_rows: list[dict] = []
+
+    for row in merged.itertuples(index=False):
+        fills_this_bar: list[dict] = []
+        next_orders_per_asset: dict[str, list] = {}
+        paused_flags: dict[str, bool] = {}
+        unrealized_total = 0.0
+
+        for symbol in symbols:
+            config = configs[symbol]
+            strategy = strategies[symbol]
+            state = states[symbol]
+            suffix = symbol.upper()
+
+            open_price = float(getattr(row, f"open_{suffix}"))
+            high = float(getattr(row, f"high_{suffix}"))
+            low = float(getattr(row, f"low_{suffix}"))
+            close = float(getattr(row, f"close_{suffix}"))
+
+            raw_c24h = change_by_symbol[symbol].get(row.timestamp, np.nan)
+            c24h = float(raw_c24h) if not np.isnan(raw_c24h) else 0.0
+            tick = TickerView(bid=open_price, ask=open_price, last=open_price, change_24h=c24h)
+
+            paused = config.pause_guard and strategy.should_pause(tick)
+            paused_flags[symbol] = paused
+            refresh_triggered = (not paused) and (strategy.anchor_price is None or strategy.should_refresh(tick))
+            if refresh_triggered:
+                strategy.set_anchor(tick.mid)
+
+            desired = [] if paused else strategy.desired_orders(tick, state["coin"])
+            for order in desired[: config.max_open_orders]:
+                filled = order.side == "BUY" and low <= order.price or order.side == "SELL" and high >= order.price
+                if not filled:
+                    continue
+
+                notional = order.price * order.quantity
+                fee = notional * FEE_RATE
+                if order.side == "BUY" and cash >= notional + fee:
+                    state["avg_cost"] = _update_average_cost(
+                        state["avg_cost"],
+                        state["coin"],
+                        order.quantity,
+                        order.price,
+                        fee,
+                    )
+                    cash -= notional + fee
+                    state["coin"] += order.quantity
+                    fill = {
+                        "timestamp": row.timestamp,
+                        "asset": symbol,
+                        "side": order.side,
+                        "price": order.price,
+                        "quantity": order.quantity,
+                        "fee": fee,
+                    }
+                    trades.append(fill)
+                    fills_this_bar.append(fill)
+                    if config.reanchor_after_fill:
+                        strategy.set_anchor(order.price)
+                elif order.side == "SELL" and state["coin"] >= order.quantity:
+                    state["realized_pnl"] += (order.price - state["avg_cost"]) * order.quantity - fee
+                    cash += notional - fee
+                    state["coin"] -= order.quantity
+                    if state["coin"] == 0:
+                        state["avg_cost"] = 0.0
+                    fill = {
+                        "timestamp": row.timestamp,
+                        "asset": symbol,
+                        "side": order.side,
+                        "price": order.price,
+                        "quantity": order.quantity,
+                        "fee": fee,
+                    }
+                    trades.append(fill)
+                    fills_this_bar.append(fill)
+                    if config.reanchor_after_fill:
+                        strategy.set_anchor(order.price)
+
+            next_orders_per_asset[symbol] = [] if paused else strategy.desired_orders(tick, state["coin"])
+            unrealized_total += state["coin"] * (close - state["avg_cost"]) if state["coin"] > 0 else 0.0
+
+        portfolio_value = cash
+        bh_value = bh_cash
+        per_asset_equity: dict[str, float] = {}
+        per_asset_close: dict[str, float] = {}
+
+        for symbol in symbols:
+            close = float(getattr(row, f"close_{symbol.upper()}"))
+            value = states[symbol]["coin"] * close
+            per_asset_equity[symbol] = value
+            per_asset_close[symbol] = close
+            portfolio_value += value
+            bh_value += states[symbol]["bh_qty"] * close
+
+        equity_row = {
+            "timestamp": row.timestamp,
+            "equity": portfolio_value,
+            "bh_equity": bh_value,
+            "cash": cash,
+        }
+        detail_row = {
+            "timestamp": row.timestamp,
+            "equity_usd": portfolio_value,
+            "bh_equity_usd": bh_value,
+            "cash_usd": cash,
+            "unrealized_pnl_usd": unrealized_total,
+            "fill_count": len(fills_this_bar),
+            "fills_json": json.dumps(fills_this_bar, default=str, separators=(",", ":")),
+            "paused_any": any(paused_flags.values()),
+        }
+
+        for symbol in symbols:
+            lower_symbol = symbol.lower()
+            equity_row[f"{lower_symbol}_coin"] = states[symbol]["coin"]
+            equity_row[f"{lower_symbol}_close"] = per_asset_close[symbol]
+            equity_row[f"{lower_symbol}_value"] = per_asset_equity[symbol]
+
+            detail_row[f"{lower_symbol}_coin"] = states[symbol]["coin"]
+            detail_row[f"{lower_symbol}_close"] = per_asset_close[symbol]
+            detail_row[f"{lower_symbol}_value_usd"] = per_asset_equity[symbol]
+            detail_row[f"{lower_symbol}_avg_cost"] = states[symbol]["avg_cost"]
+            detail_row[f"{lower_symbol}_realized_pnl_usd"] = states[symbol]["realized_pnl"]
+            detail_row[f"{lower_symbol}_paused"] = paused_flags[symbol]
+            detail_row[f"{lower_symbol}_orders_json"] = _orders_to_json(next_orders_per_asset[symbol])
+
+        equity_rows.append(equity_row)
+        detail_rows.append(detail_row)
+
+    return pd.DataFrame(equity_rows), trades, pd.DataFrame(detail_rows)
+
+
+def run_weighted_dual_backtest(
+    configs: dict[str, GridConfig],
+    histories: dict[str, pd.DataFrame],
+    weights: dict[str, float],
+    starting_cash: float = 1_000_000.0,
+    invested_ratio: float = 0.5,
+) -> tuple[pd.DataFrame, list[dict]]:
+    equity_curve, trades, _ = simulate_weighted_dual_backtest(
+        configs=configs,
+        histories=histories,
+        weights=weights,
+        starting_cash=starting_cash,
+        invested_ratio=invested_ratio,
+    )
+    return equity_curve, trades
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pair", type=str, default="SOL/USD", help="Trading pair, e.g. SOL/USD or BTC/USD")
@@ -266,12 +514,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reanchor-after-fill",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
     )
     parser.add_argument(
         "--pause-guard",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Enable/disable the 24h-change volatility pause guard (default: enabled). "
         "Use --no-pause-guard to run the bot through all market conditions.",
     )
