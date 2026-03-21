@@ -33,6 +33,9 @@ def pair_rules_from_exchange_info(exchange_info: dict, pair: str) -> PairRules:
 
 
 def coin_free_balance(balance_response: dict, pair: str) -> float:
+    if not balance_response.get("Success", True):
+        log.warning("balance returned Success=False")
+        return 0.0
     coin = pair.split("/")[0]
     wallet = balance_response.get("Wallet", {})
     coin_entry = wallet.get(coin, {})
