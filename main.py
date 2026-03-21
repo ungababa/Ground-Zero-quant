@@ -124,6 +124,7 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
         }
 
     balance = client.balance()
+    log.debug("BALANCE RESPONSE: %s", json.dumps(balance, default=str))
     coin_position = coin_free_balance(balance, config.pair)
     usd_free = usd_free_balance(balance)
 
@@ -133,7 +134,9 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
         log.debug("Cancel-all response: %s", json.dumps(cancel_resp, default=str))
         strategy.set_anchor(ticker.mid)
 
-    open_orders = pending_orders(client.query_orders(config.pair, pending_only=True, limit=config.max_open_orders))
+    orders_resp = client.query_orders(config.pair, pending_only=True, limit=config.max_open_orders)
+    log.debug("QUERY_ORDERS RESPONSE: %s", json.dumps(orders_resp, default=str))
+    open_orders = pending_orders(orders_resp)
 
     desired = strategy.desired_orders(ticker, coin_position, usd_free)
     placed = 0
