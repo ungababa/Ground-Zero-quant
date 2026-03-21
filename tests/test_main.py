@@ -1,11 +1,12 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import GridConfig, PairRules
-from main import pending_orders, run_once
+from main import load_environment, parse_args, pending_orders, run_once
 from strategy import GridStrategy
 
 
@@ -48,6 +49,26 @@ class FakeClient:
 
 
 class MainTests(unittest.TestCase):
+    def test_parse_args_accepts_multiple_env_files(self) -> None:
+        args = parse_args(["--env", ".env.sol", "--env", ".env.btc"])
+        self.assertEqual(args.env_files, [".env.sol", ".env.btc"])
+
+    @patch("main.load_dotenv")
+    def test_load_environment_loads_default_env_when_not_provided(self, mock_load_dotenv) -> None:
+        load_environment([])
+        mock_load_dotenv.assert_called_once_with()
+
+    @patch("main.load_dotenv")
+    def test_load_environment_loads_multiple_files_in_order(self, mock_load_dotenv) -> None:
+        mock_load_dotenv.return_value = True
+        load_environment([".env.sol", ".env.btc"])
+        mock_load_dotenv.assert_has_calls(
+            [
+                call(dotenv_path=".env.sol", override=True),
+                call(dotenv_path=".env.btc", override=True),
+            ]
+        )
+
     def test_run_once_places_orders_from_mock_market_data(self) -> None:
         config = GridConfig(
             levels_per_side=2,
@@ -60,7 +81,7 @@ class MainTests(unittest.TestCase):
         strategy = GridStrategy(config, rules)
         client = FakeClient()
 
-        result = run_once(client, config, strategy)
+        result = run_once(client, config, strategy, cycle=1)
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["placed_orders"], 4)
@@ -73,7 +94,7 @@ class MainTests(unittest.TestCase):
         strategy = GridStrategy(config, rules)
         client = FakeClient(change=0.05)
 
-        result = run_once(client, config, strategy)
+        result = run_once(client, config, strategy, cycle=1)
 
         self.assertEqual(result["status"], "paused")
         self.assertEqual(client.cancel_calls, 0)

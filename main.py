@@ -54,16 +54,36 @@ def pending_orders(order_response: dict) -> list[dict]:
     return pending
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pair", default=None)
     parser.add_argument("--poll-seconds", type=int, default=None)
+    parser.add_argument(
+        "--env",
+        dest="env_files",
+        action="append",
+        default=[],
+        help="Path to an env file. Can be passed multiple times; later files override earlier ones.",
+    )
     parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def load_environment(env_files: list[str]) -> None:
+    if not env_files:
+        load_dotenv()
+        return
+
+    for env_file in env_files:
+        loaded = load_dotenv(dotenv_path=env_file, override=True)
+        if loaded:
+            log.info("Loaded env file: %s", env_file)
+        else:
+            log.warning("Env file not found or empty: %s", env_file)
 
 
 def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, cycle: int) -> dict:
@@ -164,10 +184,10 @@ def setup_logging(level_name: str) -> None:
 
 
 if __name__ == "__main__":
-    load_dotenv()
     args = parse_args()
 
     setup_logging(args.log_level)
+    load_environment(args.env_files)
 
     config = GridConfig.from_env()
     if args.pair is not None:
