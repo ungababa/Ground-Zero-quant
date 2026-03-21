@@ -125,6 +125,7 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
 
     balance = client.balance()
     log.debug("BALANCE RESPONSE: %s", json.dumps(balance, default=str))
+    log.debug("SpotWallet: %s", balance.get("SpotWallet", {}))
     coin_position = coin_free_balance(balance, config.pair)
     usd_free = usd_free_balance(balance)
 
