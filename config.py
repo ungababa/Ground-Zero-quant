@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
@@ -30,6 +32,12 @@ class GridConfig:
     pair: str = "ETH/USD"
     levels_per_side: int = 30
     spacing_pct: float = 0.01
+    buy_spacing_multiplier: float = 1.0
+    sell_spacing_multiplier: float = 1.0
+
+    nearest_buy_offset_multiplier: float = 1.0
+    nearest_sell_offset_multiplier: float = 1.0
+
     per_level_notional_usd: float = 15000.0
     max_position_notional_usd: float = 450000.0
     refresh_threshold_pct: float = 0.05
@@ -38,6 +46,12 @@ class GridConfig:
     max_24h_abs_change_pct: float = 0.12
     reanchor_after_fill: bool = True
     pause_guard: bool = True
+
+    cash_reserve_pct: float = 0.05
+    reserve_cash_usd: float = 0.0
+    capital_base_usd: float = 0.0
+    disable_downward_refresh_when_no_cash: bool = True
+    disable_upward_refresh_when_no_coin: bool = True
 
     enable_signal_tilt: bool = True
     signal_history_limit: int = 200
@@ -55,6 +69,10 @@ class GridConfig:
             pair=os.getenv("GRID_PAIR", "ETH/USD"),
             levels_per_side=int(os.getenv("GRID_LEVELS_PER_SIDE", "30")),
             spacing_pct=float(os.getenv("GRID_SPACING_PCT", "0.01")),
+            buy_spacing_multiplier=float(os.getenv("GRID_BUY_SPACING_MULTIPLIER", "1.0")),
+            sell_spacing_multiplier=float(os.getenv("GRID_SELL_SPACING_MULTIPLIER", "1.0")),
+            nearest_buy_offset_multiplier=float(os.getenv("GRID_NEAREST_BUY_OFFSET_MULTIPLIER", "1.0")),
+            nearest_sell_offset_multiplier=float(os.getenv("GRID_NEAREST_SELL_OFFSET_MULTIPLIER", "1.0")),
             per_level_notional_usd=float(os.getenv("GRID_PER_LEVEL_NOTIONAL_USD", "15000")),
             max_position_notional_usd=float(os.getenv("GRID_MAX_POSITION_NOTIONAL_USD", "450000")),
             refresh_threshold_pct=float(os.getenv("GRID_REFRESH_THRESHOLD_PCT", "0.05")),
@@ -63,6 +81,15 @@ class GridConfig:
             max_24h_abs_change_pct=float(os.getenv("GRID_MAX_24H_ABS_CHANGE_PCT", "0.12")),
             reanchor_after_fill=os.getenv("GRID_REANCHOR_AFTER_FILL", "true").lower() == "true",
             pause_guard=os.getenv("GRID_PAUSE_GUARD", "true").lower() == "true",
+            cash_reserve_pct=float(os.getenv("GRID_CASH_RESERVE_PCT", "0.05")),
+            reserve_cash_usd=float(os.getenv("GRID_RESERVE_CASH_USD", "0")),
+            capital_base_usd=float(os.getenv("GRID_CAPITAL_BASE_USD", "0")),
+            disable_downward_refresh_when_no_cash=(
+                os.getenv("GRID_DISABLE_DOWNWARD_REFRESH_WHEN_NO_CASH", "true").lower() == "true"
+            ),
+            disable_upward_refresh_when_no_coin=(
+                os.getenv("GRID_DISABLE_UPWARD_REFRESH_WHEN_NO_COIN", "true").lower() == "true"
+            ),
             enable_signal_tilt=os.getenv("GRID_ENABLE_SIGNAL_TILT", "true").lower() == "true",
             signal_history_limit=int(os.getenv("GRID_SIGNAL_HISTORY_LIMIT", "200")),
             signal_fast_window=int(os.getenv("GRID_SIGNAL_FAST_WINDOW", "8")),

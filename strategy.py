@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from collections import deque
 from dataclasses import dataclass
@@ -49,8 +51,7 @@ class GridStrategy:
         self.price_history.append(float(price))
 
     def should_pause(self, ticker: TickerView) -> bool:
-        result = abs(ticker.change_24h) >= self.config.max_24h_abs_change_pct
-        return result
+        return abs(ticker.change_24h) >= self.config.max_24h_abs_change_pct
 
     def should_refresh(self, ticker: TickerView) -> bool:
         if self.anchor_price is None:
@@ -93,7 +94,12 @@ class GridStrategy:
 
         return score
 
-    def desired_orders(self, ticker: TickerView, coin_position: float, usd_free: float | None = None) -> list[DesiredOrder]:
+    def desired_orders(
+        self,
+        ticker: TickerView,
+        coin_position: float,
+        usd_free: float | None = None,
+    ) -> list[DesiredOrder]:
         if self.anchor_price is None:
             self.anchor_price = ticker.mid
 
@@ -103,18 +109,18 @@ class GridStrategy:
         anchor = self.anchor_price
         score = self._signal_tilt()
 
-        buy_spacing_mult = 1.0
-        sell_spacing_mult = 1.0
+        buy_spacing_mult = self.config.buy_spacing_multiplier
+        sell_spacing_mult = self.config.sell_spacing_multiplier
         buy_extra_levels = 0
         sell_extra_levels = 0
 
         if score > 0:
-            buy_spacing_mult = 1.0 - self.config.signal_spacing_tilt_pct
-            sell_spacing_mult = 1.0 + self.config.signal_spacing_tilt_pct
+            buy_spacing_mult *= 1.0 - self.config.signal_spacing_tilt_pct
+            sell_spacing_mult *= 1.0 + self.config.signal_spacing_tilt_pct
             buy_extra_levels = score * self.config.signal_extra_levels_per_score
         elif score < 0:
-            buy_spacing_mult = 1.0 + self.config.signal_spacing_tilt_pct
-            sell_spacing_mult = 1.0 - self.config.signal_spacing_tilt_pct
+            buy_spacing_mult *= 1.0 + self.config.signal_spacing_tilt_pct
+            sell_spacing_mult *= 1.0 - self.config.signal_spacing_tilt_pct
             sell_extra_levels = abs(score) * self.config.signal_extra_levels_per_score
 
         desired: list[DesiredOrder] = []
@@ -123,7 +129,8 @@ class GridStrategy:
         max_sell_levels = self.config.levels_per_side + sell_extra_levels
 
         for level in range(1, max_buy_levels + 1):
-            raw_price = anchor * (1 - self.config.spacing_pct * level * buy_spacing_mult)
+            level_offset = self.config.nearest_buy_offset_multiplier + (level - 1)
+            raw_price = anchor * (1 - self.config.spacing_pct * level_offset * buy_spacing_mult)
             price = self.rules.round_price(raw_price)
             if price <= 0:
                 continue
@@ -146,7 +153,8 @@ class GridStrategy:
             desired.append(DesiredOrder("BUY", price, qty))
 
         for level in range(1, max_sell_levels + 1):
-            raw_price = anchor * (1 + self.config.spacing_pct * level * sell_spacing_mult)
+            level_offset = self.config.nearest_sell_offset_multiplier + (level - 1)
+            raw_price = anchor * (1 + self.config.spacing_pct * level_offset * sell_spacing_mult)
             price = self.rules.round_price(raw_price)
             if price <= 0:
                 continue

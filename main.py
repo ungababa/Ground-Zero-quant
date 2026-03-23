@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -42,6 +44,7 @@ def coin_free_balance(balance_response: dict, pair: str) -> float:
         log.warning("SpotWallet missing from balance response: %s", balance_response)
     coin_entry = wallet.get(coin, {})
     return float(coin_entry.get("Free", 0.0))
+
 
 def usd_free_balance(balance_response: dict) -> float:
     wallet = balance_response.get("SpotWallet", {})
@@ -93,9 +96,17 @@ def load_environment(env_files: list[str]) -> None:
             log.warning("Env file not found or empty: %s", env_file)
 
 
+def reserve_cash_usd(config: GridConfig) -> float:
+    if config.reserve_cash_usd > 0:
+        return config.reserve_cash_usd
+    if config.capital_base_usd > 0:
+        return config.capital_base_usd * config.cash_reserve_pct
+    return 0.0
+
+
 def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, cycle: int) -> dict:
     ts = datetime.now(timezone.utc).isoformat()
-    log.info("CYCLE %d  started at %s", cycle, ts)
+    log.info("CYCLE %d started at %s", cycle, ts)
 
     ticker_response = client.ticker(config.pair)
     market = ticker_response["Data"][config.pair]
@@ -106,12 +117,11 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
         last=float(market["LastPrice"]),
         change_24h=float(market["Change"]),
     )
-    log.info("TICKER  %s", ticker)
+    log.info("TICKER %s", ticker)
 
-    # IMPORTANT for soft-signal strategy
     strategy.record_price(ticker.mid)
 
-    if strategy.should_pause(ticker):
+    if config.pause_guard and strategy.should_pause(ticker):
         log.warning(
             "PAUSED — 24h change %.4f%% exceeds threshold %.4f%%",
             ticker.change_24h * 100,
@@ -125,21 +135,60 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
 
     balance = client.balance()
     log.debug("BALANCE RESPONSE: %s", json.dumps(balance, default=str))
-    log.debug("SpotWallet: %s", balance.get("SpotWallet", {}))
+
     coin_position = coin_free_balance(balance, config.pair)
     usd_free = usd_free_balance(balance)
 
+    reserve_usd = reserve_cash_usd(config)
+    deployable_cash = max(usd_free - reserve_usd, 0.0)
+
+    buy_locked = deployable_cash <= 0.0
+    sell_locked = coin_position <= 0.0
+
+    refresh_triggered = False
     if strategy.should_refresh(ticker):
-        log.info("REFRESH triggered — cancelling all orders and re-anchoring to mid=%.2f", ticker.mid)
-        cancel_resp = client.cancel_order(pair=config.pair)
-        log.debug("Cancel-all response: %s", json.dumps(cancel_resp, default=str))
-        strategy.set_anchor(ticker.mid)
+        refresh_ok = True
+
+        if strategy.anchor_price is not None:
+            if (
+                config.disable_downward_refresh_when_no_cash
+                and buy_locked
+                and ticker.mid < strategy.anchor_price
+            ):
+                refresh_ok = False
+
+            if (
+                config.disable_upward_refresh_when_no_coin
+                and sell_locked
+                and ticker.mid > strategy.anchor_price
+            ):
+                refresh_ok = False
+
+        if refresh_ok:
+            log.info("REFRESH triggered — cancelling all orders and re-anchoring to mid=%.2f", ticker.mid)
+            cancel_resp = client.cancel_order(pair=config.pair)
+            log.debug("Cancel-all response: %s", json.dumps(cancel_resp, default=str))
+            strategy.set_anchor(ticker.mid)
+            refresh_triggered = True
+        else:
+            log.info(
+                "Refresh blocked due to inventory lock | buy_locked=%s sell_locked=%s anchor=%.2f mid=%.2f",
+                buy_locked,
+                sell_locked,
+                strategy.anchor_price,
+                ticker.mid,
+            )
 
     orders_resp = client.query_orders(config.pair, pending_only=True, limit=config.max_open_orders)
     log.debug("QUERY_ORDERS RESPONSE: %s", json.dumps(orders_resp, default=str))
     open_orders = pending_orders(orders_resp)
 
-    desired = strategy.desired_orders(ticker, coin_position, usd_free)
+    desired = strategy.desired_orders(
+        ticker=ticker,
+        coin_position=coin_position,
+        usd_free=deployable_cash,
+    )
+
     placed = 0
 
     desired_map = {(o.side, round(o.price, 8), round(o.quantity, 8)): o for o in desired}
@@ -176,6 +225,11 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
         "mid": ticker.mid,
         "coin_free": coin_position,
         "usd_free": usd_free,
+        "reserve_usd": reserve_usd,
+        "deployable_cash": deployable_cash,
+        "buy_locked": buy_locked,
+        "sell_locked": sell_locked,
+        "refresh_triggered": refresh_triggered,
         "anchor": strategy.anchor_price,
         "desired_orders": len(desired),
         "placed_orders": placed,
