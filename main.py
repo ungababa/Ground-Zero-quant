@@ -140,7 +140,18 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
     usd_free = usd_free_balance(balance)
 
     reserve_usd = reserve_cash_usd(config)
-    deployable_cash = max(usd_free - reserve_usd, 0.0)
+
+    # Shared-wallet-safe budgeting:
+    # each bot is capped by its own capital sleeve, not the full wallet USD.
+    bot_inventory_value = coin_position * ticker.mid
+    wallet_deployable_cash = max(usd_free - reserve_usd, 0.0)
+
+    if config.capital_base_usd > 0:
+        bot_budget_remaining = max(config.capital_base_usd - bot_inventory_value - reserve_usd, 0.0)
+    else:
+        bot_budget_remaining = wallet_deployable_cash
+
+    deployable_cash = min(wallet_deployable_cash, bot_budget_remaining)
 
     buy_locked = deployable_cash <= 0.0
     sell_locked = coin_position <= 0.0
@@ -226,6 +237,9 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
         "coin_free": coin_position,
         "usd_free": usd_free,
         "reserve_usd": reserve_usd,
+        "wallet_deployable_cash": wallet_deployable_cash,
+        "bot_inventory_value": bot_inventory_value,
+        "bot_budget_remaining": bot_budget_remaining,
         "deployable_cash": deployable_cash,
         "buy_locked": buy_locked,
         "sell_locked": sell_locked,
