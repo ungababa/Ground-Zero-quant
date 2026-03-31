@@ -9,6 +9,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backtest.backtest import load_history, run_backtest
+from backtest.backtest_portfolio_engine import compute_change_24h
 from src.config import GridConfig
 
 
@@ -74,6 +75,24 @@ class BacktestTests(unittest.TestCase):
         with patch.dict(sys.modules, {"yfinance": fake_yf}):
             with self.assertRaisesRegex(ValueError, "No historical data returned from yfinance"):
                 load_history(days=2, interval="1h")
+
+    def test_compute_change_24h_is_shifted_for_open_bar_usage(self) -> None:
+        df = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(
+                    ["2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "2026-01-03T00:00:00Z"],
+                    utc=True,
+                ),
+                "open": [100.0, 110.0, 121.0],
+                "high": [100.0, 110.0, 121.0],
+                "low": [100.0, 110.0, 121.0],
+                "close": [100.0, 110.0, 121.0],
+            }
+        )
+
+        changes = compute_change_24h(df)
+
+        self.assertEqual(changes.tolist(), [0.0, 0.0, 0.1])
 
 
 if __name__ == "__main__":

@@ -261,17 +261,6 @@ def run_once(client: RoostooClient, config: GridConfig, strategy: GridStrategy, 
             except Exception:
                 log.exception("cancel_order failed for %s", order.get("OrderID"))
 
-    if reclaim_buy_cash > 0 or reclaim_sell_qty > 0:
-        desired = strategy.desired_orders(
-            ticker=ticker,
-            coin_position=sizing.current_effective_qty + reclaim_sell_qty,
-            usd_free=sizing.pair_deployable_cash_usd + reclaim_buy_cash,
-            buy_order_notional_usd=sizing.runtime_buy_order_notional_usd,
-            sell_order_notional_usd=sizing.runtime_sell_order_notional_usd,
-            max_position_notional_usd=sizing.investable_cap_notional_usd,
-        )
-        desired_map = compute_desired_map(desired)
-
     remaining_open_map = {k: v for k, v in open_map.items() if k not in to_cancel_keys}
     to_place = [order for key, order in desired_map.items() if key not in remaining_open_map]
 

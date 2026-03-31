@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -127,6 +128,74 @@ class MainTests(unittest.TestCase):
             pending_orders({"Success": False, "ErrMsg": "no order matched", "OrderMatched": []}),
             [],
         )
+
+    def test_run_once_does_not_readd_reclaimed_resources(self) -> None:
+        config = GridConfig(
+            pair="BTC/USD",
+            levels_per_side=1,
+            spacing_pct=0.01,
+            per_level_notional_usd=1000,
+            max_position_notional_usd=3000,
+            max_open_orders=4,
+            reanchor_after_fill=False,
+            enable_signal_tilt=False,
+        )
+        rules = PairRules(pair="BTC/USD", price_precision=2, amount_precision=6, min_order_value=1.0)
+        strategy = GridStrategy(config, rules)
+        strategy.set_anchor(100.0)
+        client = FakeClient()
+
+        snapshot = SimpleNamespace(
+            open_orders_by_pair={
+                "BTC/USD": [
+                    {
+                        "OrderID": "stale-buy-1",
+                        "Side": "BUY",
+                        "Price": 98.0,
+                        "Quantity": 1.0,
+                    }
+                ]
+            }
+        )
+        sizing = SimpleNamespace(
+            pair_deployable_cash_usd=1000.0,
+            runtime_buy_order_notional_usd=100.0,
+            runtime_sell_order_notional_usd=100.0,
+            current_effective_qty=2.0,
+            investable_cap_notional_usd=5000.0,
+            buy_gap_notional_usd=1000.0,
+            pair_change_24h=0.0,
+            portfolio_drawdown_pct=0.0,
+            total_equity_usd=10000.0,
+            target_weight_pct=0.5,
+            target_notional_usd=5000.0,
+            current_notional_usd=200.0,
+            sell_gap_notional_usd=200.0,
+            buy_scale=1.0,
+            sell_scale=1.0,
+            buy_room_ratio=0.2,
+            sell_room_ratio=0.2,
+            reserve_usd=0.0,
+            emergency_reserve_usd=0.0,
+            emergency_locked_cash_usd=0.0,
+            emergency_release_fraction=0.0,
+            wallet_deployable_cash_usd=1000.0,
+        )
+        desired_order = SimpleNamespace(side="BUY", price=99.0, quantity=1.0)
+
+        desired_call_args: list[dict] = []
+
+        def capture_desired_orders(*args, **kwargs):
+            desired_call_args.append(kwargs)
+            return [desired_order]
+
+        with patch("main.get_snapshot_and_sizing", return_value=(snapshot, sizing, 10000.0)):
+            with patch.object(strategy, "desired_orders", side_effect=capture_desired_orders):
+                run_once(client, config, strategy, cycle=1)
+
+        self.assertEqual(len(desired_call_args), 1)
+        self.assertEqual(desired_call_args[0]["usd_free"], sizing.pair_deployable_cash_usd)
+        self.assertEqual(desired_call_args[0]["coin_position"], sizing.current_effective_qty)
 
 
 if __name__ == "__main__":

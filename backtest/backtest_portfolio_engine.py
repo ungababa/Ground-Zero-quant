@@ -90,6 +90,8 @@ def compute_change_24h(df: pd.DataFrame) -> np.ndarray:
         j = int(np.searchsorted(ts, cutoff, side="right")) - 1
         if j >= 0:
             changes[i] = (closes[i] - closes[j]) / closes[j]
+    if len(changes) > 0:
+        changes = np.concatenate([[np.nan], changes[:-1]])
     return np.nan_to_num(changes, nan=0.0)
 
 
