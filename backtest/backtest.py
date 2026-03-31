@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import GridConfig, PairRules
-from metrics import summarize_equity_curve
-from strategy import GridStrategy, TickerView
+from src.config import GridConfig, PairRules
+from backtest.metrics import summarize_equity_curve
+from src.strategy import GridStrategy, TickerView
 
 FEE_RATE = 0.05 / 100
 

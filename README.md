@@ -1,121 +1,126 @@
-# Roostoo BTC/USD Grid Bot Baseline
+# Portfolio-Aware Dynamic Grid Bot
 
-Baseline maker-first BTC/USD grid bot for the Roostoo mock exchange competition.
+This version is the portfolio-aware upgrade of the original 3-bot Roostoo combo.
 
-## Why this baseline
+There are still **3 bots only**:
 
-The competition explicitly rewards both return and risk-adjusted metrics while discouraging HFT. A narrow, maker-first grid on BTC/USD fits that shape well:
+- ETH/USD bot
+- SOL/USD bot
+- BTC/USD bot
 
-- BTC/USD has the deepest liquidity in the mock exchange docs.
-- Grid trading monetizes chop during the live windows.
-- Limit-first execution keeps fees low.
-- The control loop can run on a slow cadence without violating the spirit of the rules.
+All 3 bots share **one wallet**.
 
-This implementation is intentionally original, but it borrows good engineering ideas from existing ecosystems instead of reinventing everything:
+The key difference from the old version is that the bot no longer sizes itself from a blind fixed-dollar sleeve only. It now uses the **current total portfolio value** and the **current live inventory** to decide how much it can still buy and how much it can reasonably sell.
 
-- `requests` for the live REST client
-- `pandas` and `numpy` for analytics and backtesting
-- `optuna` for offline parameter search
-- optional `yfinance` for quick BTC-USD historical candles
+---
 
-Live trading code talks only to the Roostoo API.
+## Main idea
 
-## Competition details reflected here
+Each bot should behave as one sleeve of one shared portfolio.
 
-From the public Luma page:
+Instead of thinking:
 
-- Strategy build phase: Mar 16 – Mar 20
-- Preliminary live trading: Mar 21 – Mar 31
-- Final live trading: Apr 4 – Apr 14
-- Code must be open-source and original
-- Bots run 24/7 in the cloud
-- Rate limits are enforced
-- HFT is not supported; roughly one trade per minute is the intended operating style
-- Judges care about portfolio return and composite risk-adjusted metrics like Sharpe, Sortino, and Calmar
+- ETH bot has its own isolated money
+- SOL bot has its own isolated money
+- BTC bot has its own isolated money
 
-## Strategy summary
+this version thinks:
 
-This bot runs a symmetric BTC/USD grid around a reference price with a few practical protections:
+- there is **one wallet**
+- the wallet contains USD + ETH + SOL + BTC
+- each bot should size itself as a percentage of that **total live portfolio**
 
-- maker-only `LIMIT` orders
-- fixed number of buy and sell levels around the mid price
-- configurable spacing in percent
-- configurable per-level notional budget
-- max gross BTC exposure cap
-- cooldown and re-centering threshold to avoid churn
-- cancel-and-refresh only when the market moves materially
-- optional trend filter to stand down in violent one-way moves
+So for each cycle, the bot computes:
 
-This is a baseline, not a magical alpha machine. It is designed to be stable, legible, and easy to tune.
+- total wallet equity
+- its target sleeve value
+- its current asset value
+- how far under target it is on the buy side
+- how much inventory above a floor it can recycle on the sell side
 
-## Project layout
+---
 
-```text
-roostoo_grid_bot/
-├── README.md
-├── requirements.txt
-├── .env.example
-├── main.py
-├── config.py
-├── roostoo_client.py
-├── strategy.py
-├── backtest.py
-├── metrics.py
-└── optimizer.py
-```
+## What is included in total portfolio value
 
-## Setup
+Live deployment uses:
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-```
+- free USD
+- free ETH/SOL/BTC
+- pending buy notionals
+- pending sell quantities
 
-Fill in `.env` with your Roostoo credentials before live trading.
+So the bot sees not just free balances, but also what is already committed in orders.
 
-## Live run
+That is what gives the “aware of the other bots” behavior without needing direct bot-to-bot communication.
 
-```bash
-python3 main.py --pair SOL/USD --poll-seconds 60
-```
+---
 
-## Backtest
+## Strategy behavior
 
-```bash
-python3 backtest.py --days 180
-```
+This is still a **grid / mean-reversion strategy**.
 
-If `yfinance` is available, the script will download BTC-USD candles automatically. Otherwise pass a CSV with columns `timestamp,open,high,low,close`.
+It is **not** a stop-loss trend-following bot.
 
-## Optimize
+That means:
 
-```bash
-python3 optimizer.py --trials 50 --days 180
-```
+- it buys lower through the grid
+- it sells higher through the grid
+- it tries to stay close to the target sleeve structure
+- it does **not** panic sell just because price keeps going down
 
-## Notes on Roostoo API behavior
+So in a straight one-way crash:
 
-The public docs and demo code imply:
+- it may keep accumulating lower
+- it may eventually stop buying if buy gap / deployable cash is exhausted
+- it does **not** automatically cut losses like a stop-loss system
 
-- REST base URL: `https://mock-api.roostoo.com`
-- `GET /v3/exchangeInfo` exposes price and amount precision plus minimum order value
-- `GET /v3/ticker` provides `MaxBid`, `MinAsk`, and `LastPrice`
-- signed endpoints use HMAC-SHA256 over sorted form/query parameters
-- timestamp must be within roughly 60 seconds of server time
-- `POST /v3/place_order` supports `LIMIT` and `MARKET`, but this baseline uses `LIMIT`
+---
 
-## Suggested first tuning pass
+## Current tuned parameters
 
-Start roughly here for BTC/USD:
+These are the tuned defaults baked into this version:
 
-- levels per side: `4`
-- spacing: `0.35%`
-- per-level notional: `$2,000`
-- max position notional: `$12,000`
-- refresh threshold: `0.30%`
-- trend pause: `3.0%` absolute 24h change
-- poll interval: `20s`
+- `levels_per_side = 25`
+- `spacing_pct = 0.011`
+- `buy_spacing_multiplier = 1.0`
+- `sell_spacing_multiplier = 1.0`
+- `order_size_pct_of_target = 0.022`
+- `min_inventory_floor_pct_of_target = 0.10`
+- `adaptive_order_levels = 10`
+- `cash_reserve_pct = 0.07`
+- `refresh_threshold_pct = 0.05`
+- `signal_spacing_tilt_pct = 0.05`
 
-Then run offline optimization against recent BTC history and choose parameters that improve Calmar and drawdown, not just raw PnL.
+These are chosen to improve upside participation without losing the allocation discipline from the portfolio-aware framework.
+
+---
+
+## Recommended target weights
+
+Use these target weights across the 3 bots:
+
+- ETH/USD: `0.50`
+- SOL/USD: `0.25`
+- BTC/USD: `0.25`
+
+You can provide this in `.env` using `GRID_TARGET_WEIGHT_PCT`.
+
+---
+
+## Recommended `.env` examples
+
+### ETH bot
+```env
+GRID_PAIR=ETH/USD
+GRID_TARGET_WEIGHT_PCT=0.50
+GRID_ORDER_SIZE_PCT_OF_TARGET=0.022
+GRID_MAX_POSITION_PCT_OF_TARGET=1.0
+GRID_MIN_INVENTORY_FLOOR_PCT_OF_TARGET=0.10
+GRID_ADAPTIVE_ORDER_LEVELS=10
+GRID_LEVELS_PER_SIDE=25
+GRID_SPACING_PCT=0.011
+GRID_BUY_SPACING_MULTIPLIER=1.0
+GRID_SELL_SPACING_MULTIPLIER=1.0
+GRID_CASH_RESERVE_PCT=0.07
+GRID_REFRESH_THRESHOLD_PCT=0.05
+GRID_SIGNAL_SPACING_TILT_PCT=0.05
