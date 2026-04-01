@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import itertools
 import json
 import math
 import random
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
@@ -20,7 +22,7 @@ import pandas as pd
 from src.config import GridConfig, PairRules
 from src.strategy import GridStrategy, TickerView
 
-FEE_RATE = 0.05 / 100
+FEE_RATE = 0.1 / 100
 PAIRS = ("ETH/USD", "SOL/USD", "BTC/USD")
 YF_TICKERS = {"ETH/USD": "ETH-USD", "SOL/USD": "SOL-USD", "BTC/USD": "BTC-USD"}
 TARGET_WEIGHTS = {"ETH/USD": 0.50, "SOL/USD": 0.25, "BTC/USD": 0.25}
@@ -78,6 +80,13 @@ class DynamicRuntime:
     target_notional: float
     buy_gap: float
     sell_gap: float
+
+
+_WORKER_HISTORIES: dict[str, pd.DataFrame] | None = None
+_WORKER_BENCH_RETS: pd.Series | None = None
+_WORKER_INTERVAL: str | None = None
+_WORKER_INITIAL_EQUITY: float | None = None
+_WORKER_FULL_LABEL: str | None = None
 
 
 def parse_float_list(value: str) -> list[float]:
@@ -744,6 +753,120 @@ def score_trial(summaries: dict[str, dict], regime_metrics: dict[str, dict], ful
     return float(score)
 
 
+def _compute_regimes_for_summaries(
+    merged: pd.DataFrame,
+    benchmark_rets: pd.Series,
+    interval: str,
+    full_label: str,
+    summaries: dict[str, dict],
+) -> dict[str, dict]:
+    regimes: dict[str, dict] = {}
+    bars_per_day = bars_per_day_from_interval(interval)
+    for window in summaries:
+        if window == full_label:
+            window_df = merged
+        elif window == "trailing_21d":
+            window_df = merged.iloc[max(0, len(merged) - 21 * bars_per_day):].copy()
+        elif window == "trailing_10d":
+            window_df = merged.iloc[max(0, len(merged) - 10 * bars_per_day):].copy()
+        elif window == "trailing_4d":
+            window_df = merged.iloc[max(0, len(merged) - 4 * bars_per_day):].copy()
+        else:
+            window_df = merged
+        regimes[window] = compute_regime_metrics(window_df, benchmark_rets, window)
+    return regimes
+
+
+def _evaluate_candidate_from_context(
+    idx: int,
+    params: SweepParams,
+    histories: dict[str, pd.DataFrame],
+    benchmark_rets: pd.Series,
+    interval: str,
+    initial_equity: float,
+    full_label: str,
+) -> dict:
+    merged, _, _ = simulate_dynamic_portfolio(
+        histories,
+        params=params,
+        interval=interval,
+        initial_equity=initial_equity,
+    )
+    summaries = build_window_summaries(merged, interval, full_label)
+    regimes = _compute_regimes_for_summaries(merged, benchmark_rets, interval, full_label, summaries)
+    aggregate_score = score_trial(summaries, regimes, full_label)
+
+    row = {
+        "trial": idx,
+        **params.to_flat_dict(),
+        "aggregate_score": aggregate_score,
+        "full_return": summaries[full_label]["total_return"],
+        "full_drawdown": summaries[full_label]["max_drawdown"],
+        "full_sharpe": summaries[full_label]["sharpe_like"],
+        "full_sortino": summaries[full_label]["sortino_like"],
+        "full_calmar": summaries[full_label]["calmar_like"],
+        "full_benchmark_return": summaries[full_label]["benchmark_return"],
+        "trailing_21d_return": summaries.get("trailing_21d", summaries[full_label])["total_return"],
+        "trailing_21d_drawdown": summaries.get("trailing_21d", summaries[full_label])["max_drawdown"],
+        "trailing_10d_return": summaries.get("trailing_10d", summaries[full_label])["total_return"],
+        "trailing_10d_drawdown": summaries.get("trailing_10d", summaries[full_label])["max_drawdown"],
+        "trailing_4d_return": summaries.get("trailing_4d", summaries[full_label])["total_return"],
+        "trailing_4d_drawdown": summaries.get("trailing_4d", summaries[full_label])["max_drawdown"],
+        "avg_cash_weight": summaries[full_label]["avg_cash_weight"],
+        "avg_abs_weight_drift": summaries[full_label]["avg_abs_weight_drift"],
+        "avg_release_fraction": summaries[full_label]["avg_release_fraction"],
+        "avg_locked_emergency_cash": summaries[full_label]["avg_locked_emergency_cash"],
+        "full_up_capture": regimes[full_label]["up_market"].get(f"{full_label}_capture_ratio", 0.0),
+        "full_down_capture": regimes[full_label]["down_market"].get(f"{full_label}_capture_ratio", 0.0),
+        "trade_count": summaries[full_label]["trade_count"],
+        "trades_per_day": summaries[full_label]["trades_per_day"],
+    }
+
+    return {
+        "idx": idx,
+        "params": params,
+        "aggregate_score": aggregate_score,
+        "row": row,
+    }
+
+
+def _init_worker(
+    histories: dict[str, pd.DataFrame],
+    benchmark_rets: pd.Series,
+    interval: str,
+    initial_equity: float,
+    full_label: str,
+) -> None:
+    global _WORKER_HISTORIES, _WORKER_BENCH_RETS, _WORKER_INTERVAL, _WORKER_INITIAL_EQUITY, _WORKER_FULL_LABEL
+    _WORKER_HISTORIES = histories
+    _WORKER_BENCH_RETS = benchmark_rets
+    _WORKER_INTERVAL = interval
+    _WORKER_INITIAL_EQUITY = initial_equity
+    _WORKER_FULL_LABEL = full_label
+
+
+def _evaluate_candidate_worker(task: tuple[int, SweepParams]) -> dict:
+    idx, params = task
+    if (
+        _WORKER_HISTORIES is None
+        or _WORKER_BENCH_RETS is None
+        or _WORKER_INTERVAL is None
+        or _WORKER_INITIAL_EQUITY is None
+        or _WORKER_FULL_LABEL is None
+    ):
+        raise RuntimeError("Worker context is not initialized")
+
+    return _evaluate_candidate_from_context(
+        idx,
+        params,
+        _WORKER_HISTORIES,
+        _WORKER_BENCH_RETS,
+        _WORKER_INTERVAL,
+        _WORKER_INITIAL_EQUITY,
+        _WORKER_FULL_LABEL,
+    )
+
+
 def _axes_from_args(args: argparse.Namespace) -> list[list[float | int]]:
     return [
         parse_float_list(args.order_size_pcts),
@@ -889,6 +1012,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-trials", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=50)
+    parser.add_argument("--progress-every", type=int, default=1)
+    parser.add_argument("--workers", type=int, default=16)
 
     parser.add_argument("--order-size-pcts", type=str, default="0.022")
     parser.add_argument("--cash-reserves", type=str, default="0.10,0.12,0.14")
@@ -983,81 +1108,90 @@ def main() -> None:
     candidates = deduped
 
     trial_rows: list[dict] = []
-    best: TrialArtifacts | None = None
+    total_candidates = len(candidates)
+    progress_every = max(int(args.progress_every), 1)
+    workers = max(int(args.workers), 1)
+    started_at = time.perf_counter()
+    results: list[dict] = []
+    best_score_seen = float("-inf")
 
-    for idx, params in enumerate(candidates, start=1):
-        merged, weights, trades = simulate_dynamic_portfolio(
-            histories,
-            params=params,
-            interval=args.interval,
-            initial_equity=args.initial_equity,
-        )
-        summaries = build_window_summaries(merged, args.interval, full_label)
-        regimes = {
-            window: compute_regime_metrics(
-                merged.iloc[max(0, len(merged) - len(merged)):].copy() if window == full_label else merged.iloc[max(0, len(merged) - len(merged)):].copy(),
+    if workers == 1:
+        for idx, params in enumerate(candidates, start=1):
+            result = _evaluate_candidate_from_context(
+                idx,
+                params,
+                histories,
                 bench_rets,
-                window,
+                args.interval,
+                args.initial_equity,
+                full_label,
             )
-            for window in summaries
-        }
-        # Replace regime calculations with correct window slices.
-        regimes = {}
-        for window in summaries:
-            if window == full_label:
-                window_df = merged
-            elif window == "trailing_21d":
-                window_df = merged.iloc[max(0, len(merged) - 21 * bars_per_day_from_interval(args.interval)):].copy()
-            elif window == "trailing_10d":
-                window_df = merged.iloc[max(0, len(merged) - 10 * bars_per_day_from_interval(args.interval)):].copy()
-            elif window == "trailing_4d":
-                window_df = merged.iloc[max(0, len(merged) - 4 * bars_per_day_from_interval(args.interval)):].copy()
-            else:
-                window_df = merged
-            regimes[window] = compute_regime_metrics(window_df, bench_rets, window)
+            results.append(result)
+            if result["aggregate_score"] > best_score_seen:
+                best_score_seen = result["aggregate_score"]
 
-        aggregate_score = score_trial(summaries, regimes, full_label)
-        artifact = TrialArtifacts(
-            params=params,
-            merged=merged,
-            weights=weights,
-            trades=trades,
-            summaries=summaries,
-            regime_metrics=regimes,
-            aggregate_score=aggregate_score,
-        )
+            if idx == 1 or idx % progress_every == 0 or idx == total_candidates:
+                elapsed = time.perf_counter() - started_at
+                avg_per_trial = elapsed / idx if idx > 0 else 0.0
+                remaining = max(total_candidates - idx, 0)
+                eta = avg_per_trial * remaining
+                print(
+                    f"Progress {idx}/{total_candidates} | elapsed={elapsed:.1f}s | "
+                    f"eta={eta:.1f}s | best_score={best_score_seen:.6f}",
+                    flush=True,
+                )
+    else:
+        with cf.ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_init_worker,
+            initargs=(histories, bench_rets, args.interval, args.initial_equity, full_label),
+        ) as executor:
+            futures = [
+                executor.submit(_evaluate_candidate_worker, (idx, params))
+                for idx, params in enumerate(candidates, start=1)
+            ]
 
-        base = params.to_flat_dict()
-        trial_rows.append(
-            {
-                "trial": idx,
-                **base,
-                "aggregate_score": aggregate_score,
-                "full_return": summaries[full_label]["total_return"],
-                "full_drawdown": summaries[full_label]["max_drawdown"],
-                "full_sharpe": summaries[full_label]["sharpe_like"],
-                "full_sortino": summaries[full_label]["sortino_like"],
-                "full_calmar": summaries[full_label]["calmar_like"],
-                "full_benchmark_return": summaries[full_label]["benchmark_return"],
-                "trailing_21d_return": summaries.get("trailing_21d", summaries[full_label])["total_return"],
-                "trailing_21d_drawdown": summaries.get("trailing_21d", summaries[full_label])["max_drawdown"],
-                "trailing_10d_return": summaries.get("trailing_10d", summaries[full_label])["total_return"],
-                "trailing_10d_drawdown": summaries.get("trailing_10d", summaries[full_label])["max_drawdown"],
-                "trailing_4d_return": summaries.get("trailing_4d", summaries[full_label])["total_return"],
-                "trailing_4d_drawdown": summaries.get("trailing_4d", summaries[full_label])["max_drawdown"],
-                "avg_cash_weight": summaries[full_label]["avg_cash_weight"],
-                "avg_abs_weight_drift": summaries[full_label]["avg_abs_weight_drift"],
-                "avg_release_fraction": summaries[full_label]["avg_release_fraction"],
-                "avg_locked_emergency_cash": summaries[full_label]["avg_locked_emergency_cash"],
-                "full_up_capture": regimes[full_label]["up_market"].get(f"{full_label}_capture_ratio", 0.0),
-                "full_down_capture": regimes[full_label]["down_market"].get(f"{full_label}_capture_ratio", 0.0),
-                "trade_count": summaries[full_label]["trade_count"],
-                "trades_per_day": summaries[full_label]["trades_per_day"],
-            }
-        )
+            completed = 0
+            for future in cf.as_completed(futures):
+                result = future.result()
+                results.append(result)
+                completed += 1
+                if result["aggregate_score"] > best_score_seen:
+                    best_score_seen = result["aggregate_score"]
 
-        if best is None or aggregate_score > best.aggregate_score:
-            best = artifact
+                if completed == 1 or completed % progress_every == 0 or completed == total_candidates:
+                    elapsed = time.perf_counter() - started_at
+                    avg_per_trial = elapsed / completed if completed > 0 else 0.0
+                    remaining = max(total_candidates - completed, 0)
+                    eta = avg_per_trial * remaining
+                    print(
+                        f"Progress {completed}/{total_candidates} | elapsed={elapsed:.1f}s | "
+                        f"eta={eta:.1f}s | best_score={best_score_seen:.6f}",
+                        flush=True,
+                    )
+
+    results = sorted(results, key=lambda r: int(r["idx"]))
+    trial_rows = [r["row"] for r in results]
+    best_result = max(results, key=lambda r: float(r["aggregate_score"]))
+    best_params: SweepParams = best_result["params"]
+
+    best_merged, best_weights, best_trades = simulate_dynamic_portfolio(
+        histories,
+        params=best_params,
+        interval=args.interval,
+        initial_equity=args.initial_equity,
+    )
+    best_summaries = build_window_summaries(best_merged, args.interval, full_label)
+    best_regimes = _compute_regimes_for_summaries(best_merged, bench_rets, args.interval, full_label, best_summaries)
+    best = TrialArtifacts(
+        params=best_params,
+        merged=best_merged,
+        weights=best_weights,
+        trades=best_trades,
+        summaries=best_summaries,
+        regime_metrics=best_regimes,
+        aggregate_score=float(best_result["aggregate_score"]),
+    )
 
     all_trials = pd.DataFrame(trial_rows).sort_values("aggregate_score", ascending=False).reset_index(drop=True)
     top_trials = all_trials.head(args.top_k).copy()
@@ -1083,6 +1217,7 @@ def main() -> None:
         "",
         f"- days: {args.days}",
         f"- interval: {args.interval}",
+        f"- workers: {workers}",
         f"- total_trials_run: {len(all_trials)}",
         f"- full_grid_combinations: {total_combinations}",
         f"- sampled_max_trials: {args.max_trials}",

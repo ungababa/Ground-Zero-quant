@@ -13,7 +13,7 @@ from src.config import GridConfig, PairRules
 from backtest.metrics import summarize_equity_curve
 from src.strategy import GridStrategy, TickerView
 
-FEE_RATE = 0.05 / 100
+FEE_RATE = 0.1 / 100
 
 
 def _normalize_history(df: pd.DataFrame) -> pd.DataFrame:

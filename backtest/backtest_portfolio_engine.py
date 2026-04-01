@@ -10,7 +10,7 @@ import pandas as pd
 from src.config import GridConfig, PairRules
 from src.strategy import GridStrategy, TickerView
 
-FEE_RATE = 0.05 / 100
+FEE_RATE = 0.1 / 100
 PAIRS = ("ETH/USD", "SOL/USD", "BTC/USD")
 YF_TICKERS = {"ETH/USD": "ETH-USD", "SOL/USD": "SOL-USD", "BTC/USD": "BTC-USD"}
 TARGET_WEIGHTS = {"ETH/USD": 0.50, "SOL/USD": 0.25, "BTC/USD": 0.25}

@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
+
+
+
+ROOT = Path(__file__).resolve().parent.parent
+print(f"Adding {ROOT} to sys.path")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backtest_portfolio_engine import load_histories, simulate_portfolio, write_outputs
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
